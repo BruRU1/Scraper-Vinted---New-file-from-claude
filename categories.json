@@ -1,0 +1,13 @@
+{
+  "base_url": "https://www.vinted.co.uk",
+  "pages_per_category": 10,
+  "categories": [
+    { "name": "outerwear", "path": "/catalog/1206-outerwear" },
+    { "name": "trousers", "path": "/catalog/34-trousers" },
+    { "name": "jeans", "path": "/catalog/257-jeans" },
+    { "name": "tops_and_tshirts", "path": "/catalog/76-tops-and-t-shirts" },
+    { "name": "jumpers_and_sweaters", "path": "/catalog/79-jumpers-and-sweaters" },
+    { "name": "shorts", "path": "/catalog/80-shorts" },
+    { "name": "shoes", "path": "/catalog/1231-shoes" }
+  ]
+}
