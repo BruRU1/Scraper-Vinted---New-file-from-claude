@@ -1,69 +1,30 @@
 // extract.js
-// Ported directly from the Chrome extension's selectors.js + content.js.
-// Same selectors, same fallback logic, same Vinted title-attribute parser.
-// Runs inside the page via Playwright's page.evaluate().
+// v2 — rewritten using real Vinted markup (confirmed via live DOM inspection),
+// not guessed selectors. Vinted's CSS classnames are randomly hashed per build
+// (e.g. "ItemBoxPricing-module-scss-module__xkFchG__new-item-box__title"), but
+// data-testid attributes reliably END with a stable, semantic suffix
+// (e.g. "--price-text", "--description-title"). We match on that suffix using
+// CSS attribute selectors ($=), which survive Vinted's hash changes.
 
 (() => {
-  const SELECTORS = {
-    listingCard: [
-      '[data-testid="grid-item"]',
-      '.feed-grid__item',
-      'div[data-testid^="product-item"]',
-      'a.new-item-box__container'
-    ],
-    title: [
-      '[data-testid="product-item-title"]',
-      '.new-item-box__title',
-      'p.web_ui__Text__title',
-      'h3'
-    ],
-    price: [
-      '[data-testid="product-item-price"]',
-      '.new-item-box__price',
-      'p.web_ui__Text__subtitle',
-      'span[data-testid$="--price-text"]'
-    ],
-    brand: [
-      '[data-testid="product-item-brand"]',
-      '.new-item-box__brand'
-    ],
-    size: [
-      '[data-testid="product-item-size"]',
-      '.new-item-box__size'
-    ],
-    condition: [
-      '[data-testid="product-item-condition"]',
-      '.new-item-box__condition'
-    ],
-    image: [
-      'img[data-testid="product-item-photo"]',
-      'img.web_ui__Image__content',
-      'img'
-    ],
-    url: [
-      'a[data-testid="product-item-id--overlay-link"]',
-      'a.new-item-box__overlay',
-      'a'
-    ],
-    category: []
-  };
+  // Card container: match by class SUFFIX (stable) rather than the
+  // randomly-hashed prefix, using a "contains" selector.
+  const CARD_SELECTOR = '[class*="new-item-box__container"]';
 
-  function queryFirstMatch(root, selectorList, all = false) {
-    if (!selectorList) return all ? [] : null;
-    for (const sel of selectorList) {
-      try {
-        if (all) {
-          const found = root.querySelectorAll(sel);
-          if (found && found.length > 0) return Array.from(found);
-        } else {
-          const found = root.querySelector(sel);
-          if (found) return found;
-        }
-      } catch (e) {
-        continue;
-      }
+  function queryAll(root, selector) {
+    try {
+      return Array.from(root.querySelectorAll(selector));
+    } catch (e) {
+      return [];
     }
-    return all ? [] : null;
+  }
+
+  function queryOne(root, selector) {
+    try {
+      return root.querySelector(selector);
+    } catch (e) {
+      return null;
+    }
   }
 
   function cleanText(el) {
@@ -71,14 +32,22 @@
     return el.textContent.replace(/\s+/g, ' ').trim();
   }
 
+  // Fixed: Vinted's actual format is "25.00 £" (number THEN symbol),
+  // not "£25.00". Original regex only matched symbol-first and silently
+  // failed on every real listing.
   function extractPrice(rawText) {
     if (!rawText) return { price: '', currency: '' };
-    const match = rawText.match(/([£$€])?\s?(\d+(?:[.,]\d{1,2})?)\s?(GBP|USD|EUR)?/i);
-    if (!match) return { price: '', currency: '' };
-    const symbolMap = { '£': 'GBP', '$': 'USD', '€': 'EUR' };
-    const currency = (match[1] && symbolMap[match[1]]) || match[3] || '';
-    const price = match[2] ? match[2].replace(',', '.') : '';
-    return { price, currency };
+    let match = rawText.match(/(\d+(?:[.,]\d{1,2})?)\s?([£$€])/);
+    if (match) {
+      const symbolMap = { '£': 'GBP', '$': 'USD', '€': 'EUR' };
+      return { price: match[1].replace(',', '.'), currency: symbolMap[match[2]] || '' };
+    }
+    match = rawText.match(/([£$€])\s?(\d+(?:[.,]\d{1,2})?)/);
+    if (match) {
+      const symbolMap = { '£': 'GBP', '$': 'USD', '€': 'EUR' };
+      return { price: match[2].replace(',', '.'), currency: symbolMap[match[1]] || '' };
+    }
+    return { price: '', currency: '' };
   }
 
   function absoluteUrl(possiblyRelative) {
@@ -90,50 +59,46 @@
     }
   }
 
+  // The overlay link's title attribute (and the img's alt attribute) contain
+  // a full structured string, e.g.:
+  // "Renault f1 gilet..., brand: Renault, condition: Very good, size: S,
+  //  25.00 £, 26.95 £ includes Buyer Protection"
   function parseVintedTitleAttribute(text) {
     if (!text) return null;
 
     let m = text.match(
-      /^(.*?),\s*brand:\s*(.*?),\s*condition:\s*(.*?),\s*size:\s*(.*?),\s*([£$€]\s?[\d.,]+)/i
+      /^(.*?),\s*brand:\s*(.*?),\s*condition:\s*(.*?),\s*size:\s*(.*?),\s*(\d+(?:[.,]\d{1,2})?\s?[£$€])/i
     );
     if (m) {
-      return {
-        title: m[1].trim(),
-        brand: m[2].trim(),
-        condition: m[3].trim(),
-        size: m[4].trim(),
-        priceRaw: m[5].trim()
-      };
+      return { title: m[1].trim(), brand: m[2].trim(), condition: m[3].trim(), size: m[4].trim(), priceRaw: m[5].trim() };
     }
 
     m = text.match(
-      /^(.*?),\s*condition:\s*(.*?),\s*size:\s*(.*?),\s*([£$€]\s?[\d.,]+)/i
+      /^(.*?),\s*condition:\s*(.*?),\s*size:\s*(.*?),\s*(\d+(?:[.,]\d{1,2})?\s?[£$€])/i
     );
     if (m) {
-      return {
-        title: m[1].trim(),
-        brand: '',
-        condition: m[2].trim(),
-        size: m[3].trim(),
-        priceRaw: m[4].trim()
-      };
+      return { title: m[1].trim(), brand: '', condition: m[2].trim(), size: m[3].trim(), priceRaw: m[4].trim() };
+    }
+
+    m = text.match(
+      /^(.*?),\s*condition:\s*(.*?),\s*(\d+(?:[.,]\d{1,2})?\s?[£$€])/i
+    );
+    if (m) {
+      return { title: m[1].trim(), brand: '', condition: m[2].trim(), size: '', priceRaw: m[3].trim() };
     }
 
     return null;
   }
 
   function extractListingFromCard(card) {
-    let urlEl = queryFirstMatch(card, SELECTORS.url);
-    if (!urlEl && card.tagName === 'A') urlEl = card;
+    const urlEl = queryOne(card, 'a[data-testid$="--overlay-link"]') || queryOne(card, 'a');
     const rawUrl = urlEl ? (urlEl.getAttribute('href') || '') : '';
-
     const attributeText = urlEl ? urlEl.getAttribute('title') : '';
     const parsed = parseVintedTitleAttribute(attributeText);
 
-    const imageEl = queryFirstMatch(card, SELECTORS.image);
-    const rawImage = imageEl
-      ? (imageEl.getAttribute('src') || imageEl.getAttribute('data-src') || '')
-      : '';
+    const imageEl = queryOne(card, 'img[data-testid$="--image--img"]') || queryOne(card, 'img');
+    const rawImage = imageEl ? (imageEl.getAttribute('src') || imageEl.getAttribute('data-src') || '') : '';
+    const imageAlt = imageEl ? (imageEl.getAttribute('alt') || '') : '';
 
     let title, brand, condition, size, price, currency;
 
@@ -144,38 +109,63 @@
       size = parsed.size;
       ({ price, currency } = extractPrice(parsed.priceRaw));
     } else {
-      const titleEl = queryFirstMatch(card, SELECTORS.title);
-      const priceEl = queryFirstMatch(card, SELECTORS.price);
-      const brandEl = queryFirstMatch(card, SELECTORS.brand);
-      const sizeEl = queryFirstMatch(card, SELECTORS.size);
-      const conditionEl = queryFirstMatch(card, SELECTORS.condition);
+      const titleOrBrandEl = queryOne(card, '[data-testid$="--description-title"]');
+      const subtitleEl = queryOne(card, '[data-testid$="--description-subtitle"]');
+      const priceEl = queryOne(card, '[data-testid$="--price-text"]');
 
-      title = cleanText(titleEl);
-      brand = cleanText(brandEl);
-      condition = cleanText(conditionEl);
-      size = cleanText(sizeEl);
-      ({ price, currency } = extractPrice(cleanText(priceEl)));
+      const altParsed = parseVintedTitleAttribute(imageAlt);
+      if (altParsed) {
+        title = altParsed.title;
+        brand = altParsed.brand;
+        condition = altParsed.condition;
+        size = altParsed.size;
+        ({ price, currency } = extractPrice(altParsed.priceRaw));
+      } else {
+        title = cleanText(titleOrBrandEl);
+        brand = cleanText(titleOrBrandEl);
+        const subtitleText = cleanText(subtitleEl);
+        if (subtitleText.includes('\u00b7')) {
+          const parts = subtitleText.split('\u00b7').map(s => s.trim());
+          size = parts[0] || '';
+          condition = parts[1] || '';
+        } else {
+          size = '';
+          condition = subtitleText;
+        }
+        ({ price, currency } = extractPrice(cleanText(priceEl)));
+      }
     }
 
-    const categoryEl = queryFirstMatch(card, SELECTORS.category);
-    const category = cleanText(categoryEl);
-
     return {
-      title,
-      price,
-      currency,
-      brand,
-      category,
-      size,
-      condition,
+      title: title || '',
+      price: price || '',
+      currency: currency || '',
+      brand: brand || '',
+      category: '',
+      size: size || '',
+      condition: condition || '',
       url: absoluteUrl(rawUrl),
       imageUrl: absoluteUrl(rawImage)
     };
   }
 
-  const cards = queryFirstMatch(document, SELECTORS.listingCard, true);
+  let cards = queryAll(document, CARD_SELECTOR);
+
+  if (cards.length === 0) {
+    const fallbackSelectors = [
+      '[data-testid="grid-item"]',
+      '.feed-grid__item',
+      'div[data-testid^="product-item"]',
+      'a.new-item-box__container'
+    ];
+    for (const sel of fallbackSelectors) {
+      cards = queryAll(document, sel);
+      if (cards.length > 0) break;
+    }
+  }
+
   if (!cards || cards.length === 0) {
-    return { success: false, error: 'No listing cards found — selectors may be outdated.', listings: [] };
+    return { success: false, error: 'No listing cards found — page structure may have changed.', listings: [] };
   }
 
   const listings = [];
