@@ -2,13 +2,19 @@
   "base_url": "https://www.vinted.co.uk",
   "pages_per_category": 10,
   "categories": [
-    { "name": "outerwear", "path": "/catalog/1206-outerwear" },
-    { "name": "trousers", "path": "/catalog/34-trousers" },
-    { "name": "jeans", "path": "/catalog/257-jeans" },
-    { "name": "tops_and_tshirts", "path": "/catalog/76-tops-and-t-shirts" },
-    { "name": "jumpers_and_sweaters", "path": "/catalog/79-jumpers-and-sweaters" },
-    { "name": "shorts", "path": "/catalog/80-shorts" },
-    { "name": "shoes", "path": "/catalog/1231-shoes" }
-    { "name": "activewear", "path": "/catalog/30-activewear" }
+    { "name": "mens_outerwear", "path": "/catalog/1206-outerwear" },
+    { "name": "mens_trousers", "path": "/catalog/34-trousers" },
+    { "name": "mens_jeans", "path": "/catalog/257-jeans" },
+    { "name": "mens_tops_and_tshirts", "path": "/catalog/76-tops-and-t-shirts" },
+    { "name": "mens_jumpers_and_sweaters", "path": "/catalog/79-jumpers-and-sweaters" },
+    { "name": "mens_shorts", "path": "/catalog/80-shorts" },
+    { "name": "mens_shoes", "path": "/catalog/1231-shoes" },
+    { "name": "mens_activewear", "path": "/catalog/30-activewear" },
+    { "name": "womens_jumpers_and_sweaters", "path": "/catalog/13-jumpers-and-sweaters" },
+    { "name": "womens_dresses", "path": "/catalog/10-dresses" },
+    { "name": "womens_skorts", "path": "/catalog/5491-skorts" },
+    { "name": "womens_jeans", "path": "/catalog/183-jeans" },
+    { "name": "womens_outerwear", "path": "/catalog/1037-outerwear" },
+    { "name": "womens_tops_and_tshirts", "path": "/catalog/12-tops-and-t-shirts" }
   ]
 }
