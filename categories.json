@@ -9,5 +9,6 @@
     { "name": "jumpers_and_sweaters", "path": "/catalog/79-jumpers-and-sweaters" },
     { "name": "shorts", "path": "/catalog/80-shorts" },
     { "name": "shoes", "path": "/catalog/1231-shoes" }
+    { "name": "activewear", "path": "/catalog/30-activewear" }
   ]
 }
