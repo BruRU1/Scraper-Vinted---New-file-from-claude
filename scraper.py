@@ -103,7 +103,8 @@ def load_extract_script():
 def build_url(base_url, path, page_number):
     if page_number <= 1:
         return f"{base_url}{path}"
-    return f"{base_url}{path}?page={page_number}"
+    separator = "&" if "?" in path else "?"
+    return f"{base_url}{path}{separator}page={page_number}"
 
 
 def ensure_data_files():
