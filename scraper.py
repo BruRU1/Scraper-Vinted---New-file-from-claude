@@ -274,8 +274,9 @@ def scrape():
         for category in categories:
             name = category["name"]
             path = category["path"]
+            category_pages = category.get("pages", pages_per_category)
 
-            for page_number in range(1, pages_per_category + 1):
+            for page_number in range(1, category_pages + 1):
                 url = build_url(base_url, path, page_number)
                 print(f"[{name}] page {page_number} -> {url}")
 
