@@ -16,27 +16,39 @@
     { "name": "womens_jeans", "path": "/catalog/183-jeans" },
     { "name": "womens_outerwear", "path": "/catalog/1037-outerwear" },
     { "name": "womens_tops_and_tshirts", "path": "/catalog/12-tops-and-t-shirts" },
-    { "name": "brand_nike", "path": "/catalog?search_text=Nike" },
-    { "name": "brand_nike_air_max_95", "path": "/catalog?search_text=nike%20air%20max%2095" },
-    { "name": "brand_supreme", "path": "/catalog?search_text=Supreme" },
-    { "name": "brand_supreme_t_shirt", "path": "/catalog?search_text=supreme%20t%20shirt" },
-    { "name": "brand_supreme_hoodie", "path": "/catalog?search_text=supreme%20hoodie" },
-    { "name": "brand_supreme_shirt", "path": "/catalog?search_text=supreme%20shirt" },
-    { "name": "brand_palace", "path": "/catalog?search_text=Palace" },
-    { "name": "brand_palace_shirt", "path": "/catalog?search_text=palace%20shirt" },
-    { "name": "brand_palace_hoodie", "path": "/catalog?search_text=palace%20hoodie" },
-    { "name": "brand_palace_t_shirt", "path": "/catalog?search_text=palace%20t%20shirtt" },
-    { "name": "brand_adidas", "path": "/catalog?search_text=adidas" },
-    { "name": "brand_adidas_shoes", "path": "/catalog?search_text=adidas%20shoes" },
-    { "name": "brand_carhartt", "path": "/catalog?search_text=carhart" },
-    { "name": "brand_carhartt_t_shirt", "path": "/catalog?search_text=carhart%20t%20shirt" },
-    { "name": "brand_carhartt_jacket", "path": "/catalog?search_text=carhart%20jacket" },
-    { "name": "brand_polo_ralph_lauren", "path": "/catalog?search_text=polo%20ralph%20lauren" },
-    { "name": "brand_ralph_lauren_polo_shirt", "path": "/catalog?search_text=ralph%20lauren%20polo%20shirt" },
-    { "name": "brand_ralph_lauren_shirt", "path": "/catalog?search_text=ralph%20lauren%20shirt" },
-    { "name": "brand_ralph_lauren_hoodie", "path": "/catalog?search_text=ralph%20lauren%20hoodie" },
-    { "name": "brand_hm", "path": "/catalog?search_text=H%26M" },
-    { "name": "brand_bershka", "path": "/catalog?search_text=Bershka" },
-    { "name": "brand_levis", "path": "/catalog?search_text=Levi%27s" }
+
+    { "name": "brand_nike", "path": "/catalog?search_text=Nike", "pages": 10 },
+    { "name": "brand_nike_air_max_95", "path": "/catalog?search_text=nike%20air%20max%2095", "pages": 8 },
+    { "name": "brand_nike_hoodie", "path": "/catalog?search_text=nike%20hoodie", "pages": 8 },
+    { "name": "brand_nike_t_shirt", "path": "/catalog?search_text=nike%20t%20shirt", "pages": 8 },
+    { "name": "brand_nike_tracksuit", "path": "/catalog?search_text=nike%20tracksuit", "pages": 8 },
+    { "name": "brand_nike_tech_fleece_hoodie", "path": "/catalog?search_text=nike%20tech%20fleece%20hoodie", "pages": 8 },
+    { "name": "brand_nike_tech_fleece_trousers", "path": "/catalog?search_text=nike%20tech%20fleece%20trousers", "pages": 8 },
+
+    { "name": "brand_supreme", "path": "/catalog?search_text=Supreme", "pages": 10 },
+    { "name": "brand_supreme_t_shirt", "path": "/catalog?search_text=supreme%20t%20shirt", "pages": 8 },
+    { "name": "brand_supreme_hoodie", "path": "/catalog?search_text=supreme%20hoodie", "pages": 8 },
+    { "name": "brand_supreme_shirt", "path": "/catalog?search_text=supreme%20shirt", "pages": 8 },
+
+    { "name": "brand_palace", "path": "/catalog?search_text=Palace", "pages": 8 },
+    { "name": "brand_palace_shirt", "path": "/catalog?search_text=palace%20shirt", "pages": 7 },
+    { "name": "brand_palace_hoodie", "path": "/catalog?search_text=palace%20hoodie", "pages": 7 },
+    { "name": "brand_palace_t_shirt", "path": "/catalog?search_text=palace%20t%20shirtt", "pages": 7 },
+
+    { "name": "brand_adidas", "path": "/catalog?search_text=adidas", "pages": 10 },
+    { "name": "brand_adidas_shoes", "path": "/catalog?search_text=adidas%20shoes", "pages": 10 },
+
+    { "name": "brand_carhartt", "path": "/catalog?search_text=carhart", "pages": 8 },
+    { "name": "brand_carhartt_t_shirt", "path": "/catalog?search_text=carhart%20t%20shirt", "pages": 7 },
+    { "name": "brand_carhartt_jacket", "path": "/catalog?search_text=carhart%20jacket", "pages": 8 },
+
+    { "name": "brand_polo_ralph_lauren", "path": "/catalog?search_text=polo%20ralph%20lauren", "pages": 10 },
+    { "name": "brand_ralph_lauren_polo_shirt", "path": "/catalog?search_text=ralph%20lauren%20polo%20shirt", "pages": 8 },
+    { "name": "brand_ralph_lauren_shirt", "path": "/catalog?search_text=ralph%20lauren%20shirt", "pages": 8 },
+    { "name": "brand_ralph_lauren_hoodie", "path": "/catalog?search_text=ralph%20lauren%20hoodie", "pages": 8 },
+
+    { "name": "brand_hm", "path": "/catalog?search_text=H%26M", "pages": 10 },
+    { "name": "brand_bershka", "path": "/catalog?search_text=Bershka", "pages": 10 },
+    { "name": "brand_levis", "path": "/catalog?search_text=Levi%27s", "pages": 10 }
   ]
 }
