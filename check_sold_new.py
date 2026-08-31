@@ -24,6 +24,12 @@ from sold_checker import load_listings, save_listings, process_listings
 # scheduled scrapes (6 hours) plus some buffer for GitHub Actions delays.
 RECENT_WINDOW_MINUTES = 8 * 60  # 8 hours
 
+# Safety valve: never check more than this many listings in a single run,
+# even if more are newly-flagged. Anything over the cap just gets picked
+# up on a later run instead (it stays within the recency window for a
+# while), so nothing is skipped forever - it just spreads out.
+MAX_PER_RUN = 3000
+
 
 def parse_dt(value):
     if not value:
@@ -50,12 +56,22 @@ def main():
             newly_flagged.append(row)
 
     print(f"Loaded {len(listings)} total listings.")
-    print(f"Found {len(newly_flagged)} newly-flagged listings to check "
-          f"(flagged within the last {RECENT_WINDOW_MINUTES // 60} hours).\n")
+    print(f"Found {len(newly_flagged)} newly-flagged listings "
+          f"(flagged within the last {RECENT_WINDOW_MINUTES // 60} hours).")
 
     if not newly_flagged:
         print("Nothing new to check.")
         return
+
+    # Oldest-flagged first, so nothing waits indefinitely if we're over cap.
+    newly_flagged.sort(key=lambda r: r.get("date_disappeared") or "")
+
+    if len(newly_flagged) > MAX_PER_RUN:
+        print(f"Capping this run to {MAX_PER_RUN} (oldest-flagged first); "
+              f"the rest will be picked up on a later run.\n")
+        newly_flagged = newly_flagged[:MAX_PER_RUN]
+    else:
+        print()
 
     counts = process_listings(newly_flagged, listings_by_id)
 
