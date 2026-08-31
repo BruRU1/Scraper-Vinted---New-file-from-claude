@@ -53,7 +53,7 @@ HISTORY_PATH = DATA_DIR / "price_history.csv"
 # from before we flag it as likely sold/removed. Keeps a single missed
 # appearance (e.g. pagination shuffled by new listings) from being a
 # false positive.
-MISSING_RUNS_THRESHOLD = 2
+MISSING_RUNS_THRESHOLD = 3
 
 LISTINGS_COLUMNS = [
     "listing_id",
