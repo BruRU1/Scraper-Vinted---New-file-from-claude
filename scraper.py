@@ -72,7 +72,7 @@ LISTINGS_COLUMNS = [
     "imageUrl",
     "first_seen",
     "last_seen",
-    "status",              # "active" | "likely_sold_or_removed" | "confirmed_sold"
+    "status",              # "active" | "likely_sold_or_removed" | "confirmed_sold" | "deleted"
     "date_disappeared",    # set when status flips away from active; cleared if reactivated
     "consecutive_misses",
     "sold_price",           # set only when status becomes confirmed_sold
