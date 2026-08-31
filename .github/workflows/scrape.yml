@@ -45,7 +45,7 @@ jobs:
     timeout-minutes: 45
     strategy:
       matrix:
-        batch: [0, 1, 2, 3, 4]
+        batch: [0, 1, 2, 3, 4, 5, 6, 7]
       fail-fast: false
     steps:
       - name: Check out repo
