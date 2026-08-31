@@ -24,7 +24,7 @@ DATA_DIR = ROOT / "data"
 LISTINGS_PATH = DATA_DIR / "listings.csv"
 BATCHES_DIR = DATA_DIR / "batches"
 
-NUM_BATCHES = 5
+NUM_BATCHES = 8
 
 # How recently a listing must have been flagged to be picked up this run.
 RECENT_WINDOW_MINUTES = 8 * 60  # 8 hours
