@@ -72,9 +72,11 @@ LISTINGS_COLUMNS = [
     "imageUrl",
     "first_seen",
     "last_seen",
-    "status",              # "active" | "likely_sold_or_removed"
-    "date_disappeared",    # set when status flips to likely_sold_or_removed; cleared if it reappears
+    "status",              # "active" | "likely_sold_or_removed" | "confirmed_sold"
+    "date_disappeared",    # set when status flips away from active; cleared if reactivated
     "consecutive_misses",
+    "sold_price",           # set only when status becomes confirmed_sold
+    "sold_confirmed_at",    # timestamp the sold check confirmed it
 ]
 
 HISTORY_COLUMNS = [
@@ -196,6 +198,8 @@ def reconcile(listings_by_url, next_id, scraped_listing, category_name, now_iso)
             "status": "active",
             "date_disappeared": "",
             "consecutive_misses": 0,
+            "sold_price": "",
+            "sold_confirmed_at": "",
         }
     else:
         # Known listing (whether it was active or previously flagged as
@@ -230,6 +234,8 @@ def reconcile(listings_by_url, next_id, scraped_listing, category_name, now_iso)
         existing["status"] = "active"
         existing["date_disappeared"] = ""
         existing["consecutive_misses"] = 0
+        existing["sold_price"] = ""
+        existing["sold_confirmed_at"] = ""
 
     return next_id, history_row, url
 
