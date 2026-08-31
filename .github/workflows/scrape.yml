@@ -1,13 +1,14 @@
 name: Vinted Scraper
 on:
   schedule:
-    # Runs at 00:00, 06:00, 12:00, 18:00 UTC — every 6 hours
     - cron: "0 */6 * * *"
-  workflow_dispatch: {}   # lets you trigger it manually from the Actions tab too
+  workflow_dispatch: {}
 jobs:
   scrape:
     runs-on: ubuntu-latest
-    timeout-minutes: 120
+    timeout-minutes: 60
+    outputs:
+      has_batches: ${{ steps.split.outputs.has_batches }}
     steps:
       - name: Check out repo
         uses: actions/checkout@v4
@@ -21,14 +22,84 @@ jobs:
           playwright install --with-deps chromium
       - name: Run scraper
         run: python scraper.py
-      - name: Check newly-flagged sold listings
-        run: python check_sold_new.py
-      - name: Run analyzer
-        run: python analyze.py
-      - name: Commit and push updated data
+      - name: Split newly-flagged listings into batches
+        id: split
+        run: python split_batches.py
+      - name: Commit listings after scrape
         run: |
           git config user.name "vinted-scraper-bot"
           git config user.email "actions@users.noreply.github.com"
-          git add data/listings.csv data/price_history.csv data/group_stats.csv data/deals.csv
-          git diff --quiet --cached || git commit -m "Update scraped data + analytics $(date -u +'%Y-%m-%d %H:%M UTC')"
+          git add data/listings.csv data/price_history.csv
+          git diff --quiet --cached || git commit -m "Scrape update $(date -u +'%Y-%m-%d %H:%M UTC')"
+          git push
+      - name: Upload batch files
+        uses: actions/upload-artifact@v4
+        with:
+          name: batches
+          path: data/batches/batch_*.csv
+          retention-days: 1
+
+  check-batches:
+    needs: scrape
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      matrix:
+        batch: [0, 1, 2, 3, 4]
+      fail-fast: false
+    steps:
+      - name: Check out repo
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+          playwright install --with-deps chromium
+      - name: Download batch files
+        uses: actions/download-artifact@v4
+        with:
+          name: batches
+          path: data/batches
+      - name: Check this batch
+        run: python check_batch.py ${{ matrix.batch }}
+      - name: Upload this batch's results
+        uses: actions/upload-artifact@v4
+        with:
+          name: results-${{ matrix.batch }}
+          path: data/batches/results_${{ matrix.batch }}.csv
+          retention-days: 1
+
+  merge-and-analyze:
+    needs: check-batches
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out repo
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+      - name: Download all batch results
+        uses: actions/download-artifact@v4
+        with:
+          pattern: results-*
+          path: data/batches
+          merge-multiple: true
+      - name: Merge results into listings.csv
+        run: python merge_batches.py
+      - name: Run analyzer
+        run: python analyze.py
+      - name: Commit and push final data
+        run: |
+          git config user.name "vinted-scraper-bot"
+          git config user.email "actions@users.noreply.github.com"
+          git pull --rebase
+          git add data/listings.csv data/group_stats.csv data/deals.csv
+          git diff --quiet --cached || git commit -m "Sold-check + analytics $(date -u +'%Y-%m-%d %H:%M UTC')"
           git push
