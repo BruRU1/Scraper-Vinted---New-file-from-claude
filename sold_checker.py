@@ -10,14 +10,17 @@ For a given listing URL, visiting the page tells us one of three things:
   1. SOLD    - the page loads and shows Vinted's "Sold" badge
                (<div class="web_ui__Cell__body">Sold</div>).
                We also try to read the sold price from the page.
+               status becomes "confirmed_sold".
   2. ACTIVE  - the page loads fine and there's no Sold badge - the listing
                was just buried past the pages we scrape (e.g. past page 10),
                not actually gone. We refresh its data and reactivate it.
-  3. GONE    - the page 404s / errors entirely. Genuinely removed, but we
+               status becomes "active".
+  3. DELETED - the page 404s / errors entirely. Genuinely removed, but we
                can't confirm *why* (could be sold without the badge, could
-               be taken down, could be blocked from us) - stays as
-               likely_sold_or_removed, just now more confidently "not
-               reachable" rather than "not seen in a scrape".
+               be taken down, could be blocked from us).
+               status becomes "deleted" - distinct from the old
+               "likely_sold_or_removed" guess, since this one was actually
+               visited and confirmed unreachable, not just inferred.
 
 This module doesn't run on its own - it's imported by:
   - check_sold_backlog.py   (one-time pass over the existing backlog)
@@ -171,10 +174,13 @@ def process_listings(listing_rows, listings_by_id):
                 print(f"    -> still ACTIVE (was buried, not gone)")
 
             else:  # gone
-                # Stays likely_sold_or_removed - genuinely unreachable but
-                # we can't confirm it was actually sold.
+                # Distinct from confirmed_sold and from the historical
+                # unconfirmed likely_sold_or_removed guesses - this is a
+                # page that 404'd/errored when actually visited.
+                target["status"] = "deleted"
+                target["date_disappeared"] = target.get("date_disappeared") or now_iso
                 counts["gone_unconfirmed"] += 1
-                print(f"    -> GONE (404/error, unconfirmed)")
+                print(f"    -> DELETED (404/error, unconfirmed)")
 
             import random
             import time
