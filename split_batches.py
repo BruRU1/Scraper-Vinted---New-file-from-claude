@@ -1,27 +1,25 @@
 """
 split_batches.py
 
-Finds listings newly flagged "likely_sold_or_removed" (within the recency
-window), splits them into N batch files, and saves each batch as its own
-small CSV under data/batches/.
+Selects listings still marked "likely_sold_or_removed" and splits them
+into N batch files for parallel checking.
 
-These batch files are picked up by parallel matrix jobs in the GitHub
-Actions workflow, each running check_batch.py on one batch at the same
-time - so instead of checking everything one after another, N jobs each
-check a fraction simultaneously, cutting wall-clock time roughly by a
-factor of N.
+IMPORTANT: this no longer filters by "flagged within the last N hours".
+That approach had a real failure mode - if a run's results ever failed
+to push (e.g. the git error this replaced), the affected listings would
+silently age out of the window and simply stop being checked at all,
+even though they were never actually resolved.
 
-Each batch is also capped (see MAX_PER_BATCH in check_batch.py), so any
-one run might not clear the entire backlog - the recency window here
-being wide enough (24 hours = ~4 scheduled runs) gives leftover items
-several more chances to be picked up before they'd be excluded.
+Instead: always take the OLDEST unconfirmed listings first (by
+date_disappeared), up to TOTAL_CAP_PER_RUN for this run. This guarantees
+steady forward progress through the backlog regardless of any run's
+success/failure history - nothing can silently fall out of scope.
 
 Run manually:  python split_batches.py
 """
 
 import csv
 import math
-from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
 ROOT = Path(__file__).parent
@@ -31,60 +29,50 @@ BATCHES_DIR = DATA_DIR / "batches"
 
 NUM_BATCHES = 18
 
-# How recently a listing must have been flagged to be picked up this run.
-# Widened from 8h to 24h (~4 scheduled runs) so a backlog spike that can't
-# be fully cleared in one run still gets picked up on later runs instead
-# of falling out of scope.
-RECENT_WINDOW_MINUTES = 24 * 60  # 24 hours
+# Total listings to process in one run, across all batches combined.
+# Keep this in line with what NUM_BATCHES x MAX_PER_BATCH in
+# check_batch.py can comfortably handle within the job timeout.
+TOTAL_CAP_PER_RUN = 18000
 
 BATCH_COLUMNS = ["listing_id", "url"]
-
-
-def parse_dt(value):
-    if not value:
-        return None
-    try:
-        return datetime.fromisoformat(value)
-    except ValueError:
-        return None
 
 
 def main():
     with open(LISTINGS_PATH, "r", newline="", encoding="utf-8") as f:
         listings = list(csv.DictReader(f))
 
-    now = datetime.now(timezone.utc)
-    cutoff = now - timedelta(minutes=RECENT_WINDOW_MINUTES)
-
-    newly_flagged = []
-    for row in listings:
-        if row.get("status") != "likely_sold_or_removed":
-            continue
-        disappeared = parse_dt(row.get("date_disappeared"))
-        if disappeared and disappeared >= cutoff:
-            newly_flagged.append(row)
+    unconfirmed = [row for row in listings if row.get("status") == "likely_sold_or_removed"]
 
     print(f"Loaded {len(listings)} total listings.")
-    print(f"Found {len(newly_flagged)} listings to check "
-          f"(flagged within the last {RECENT_WINDOW_MINUTES // 60} hours).")
+    print(f"Found {len(unconfirmed)} listings still marked likely_sold_or_removed (total backlog).")
+
+    # Oldest-flagged first (blank date_disappeared sorts last, not first,
+    # so it doesn't jump the queue ahead of dated ones).
+    unconfirmed.sort(key=lambda r: r.get("date_disappeared") or "9999")
+
+    to_check = unconfirmed[:TOTAL_CAP_PER_RUN]
+    print(f"Processing {len(to_check)} this run (oldest-flagged first, "
+          f"cap {TOTAL_CAP_PER_RUN}).")
+    if len(unconfirmed) > TOTAL_CAP_PER_RUN:
+        print(f"  {len(unconfirmed) - TOTAL_CAP_PER_RUN} remain for future runs.")
 
     BATCHES_DIR.mkdir(exist_ok=True, parents=True)
     for old_file in BATCHES_DIR.glob("batch_*.csv"):
         old_file.unlink()
 
-    if not newly_flagged:
+    if not to_check:
         print("Nothing to check - writing empty batch files.")
         for i in range(NUM_BATCHES):
             with open(BATCHES_DIR / f"batch_{i}.csv", "w", newline="", encoding="utf-8") as f:
                 csv.DictWriter(f, fieldnames=BATCH_COLUMNS).writeheader()
         return
 
-    batch_size = math.ceil(len(newly_flagged) / NUM_BATCHES)
+    batch_size = math.ceil(len(to_check) / NUM_BATCHES)
 
     for i in range(NUM_BATCHES):
         start = i * batch_size
         end = start + batch_size
-        batch_rows = newly_flagged[start:end]
+        batch_rows = to_check[start:end]
 
         with open(BATCHES_DIR / f"batch_{i}.csv", "w", newline="", encoding="utf-8") as f:
             writer = csv.DictWriter(f, fieldnames=BATCH_COLUMNS)
