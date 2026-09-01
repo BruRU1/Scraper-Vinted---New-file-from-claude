@@ -7,8 +7,6 @@ jobs:
   scrape:
     runs-on: ubuntu-latest
     timeout-minutes: 120
-    outputs:
-      has_batches: ${{ steps.split.outputs.has_batches }}
     steps:
       - name: Check out repo
         uses: actions/checkout@v4
@@ -22,8 +20,7 @@ jobs:
           playwright install --with-deps chromium
       - name: Run scraper
         run: python scraper.py
-      - name: Split newly-flagged listings into batches
-        id: split
+      - name: Split unconfirmed listings into batches
         run: python split_batches.py
       - name: Commit listings after scrape
         run: |
@@ -31,7 +28,8 @@ jobs:
           git config user.email "actions@users.noreply.github.com"
           git add data/listings.csv data/price_history.csv
           git diff --quiet --cached || git commit -m "Scrape update $(date -u +'%Y-%m-%d %H:%M UTC')"
-          git push
+          git pull --rebase origin main
+          git push origin HEAD:main
       - name: Upload batch files
         uses: actions/upload-artifact@v4
         with:
@@ -99,8 +97,7 @@ jobs:
         run: |
           git config user.name "vinted-scraper-bot"
           git config user.email "actions@users.noreply.github.com"
-          git fetch origin
-          git pull --rebase origin main
           git add data/listings.csv data/group_stats.csv data/deals.csv
           git diff --quiet --cached || git commit -m "Sold-check + analytics $(date -u +'%Y-%m-%d %H:%M UTC')"
+          git pull --rebase origin main
           git push origin HEAD:main
