@@ -2,14 +2,19 @@
 split_batches.py
 
 Finds listings newly flagged "likely_sold_or_removed" (within the recency
-window, same logic as before), splits them into N batch files, and saves
-each batch as its own small CSV under data/batches/.
+window), splits them into N batch files, and saves each batch as its own
+small CSV under data/batches/.
 
 These batch files are picked up by parallel matrix jobs in the GitHub
 Actions workflow, each running check_batch.py on one batch at the same
-time - so instead of checking 22,000 listings one after another, N jobs
-each check ~22,000/N listings simultaneously, cutting wall-clock time
-roughly by a factor of N.
+time - so instead of checking everything one after another, N jobs each
+check a fraction simultaneously, cutting wall-clock time roughly by a
+factor of N.
+
+Each batch is also capped (see MAX_PER_BATCH in check_batch.py), so any
+one run might not clear the entire backlog - the recency window here
+being wide enough (24 hours = ~4 scheduled runs) gives leftover items
+several more chances to be picked up before they'd be excluded.
 
 Run manually:  python split_batches.py
 """
@@ -24,10 +29,13 @@ DATA_DIR = ROOT / "data"
 LISTINGS_PATH = DATA_DIR / "listings.csv"
 BATCHES_DIR = DATA_DIR / "batches"
 
-NUM_BATCHES = 10
+NUM_BATCHES = 18
 
 # How recently a listing must have been flagged to be picked up this run.
-RECENT_WINDOW_MINUTES = 8 * 60  # 8 hours
+# Widened from 8h to 24h (~4 scheduled runs) so a backlog spike that can't
+# be fully cleared in one run still gets picked up on later runs instead
+# of falling out of scope.
+RECENT_WINDOW_MINUTES = 24 * 60  # 24 hours
 
 BATCH_COLUMNS = ["listing_id", "url"]
 
@@ -57,10 +65,10 @@ def main():
             newly_flagged.append(row)
 
     print(f"Loaded {len(listings)} total listings.")
-    print(f"Found {len(newly_flagged)} newly-flagged listings to check.")
+    print(f"Found {len(newly_flagged)} listings to check "
+          f"(flagged within the last {RECENT_WINDOW_MINUTES // 60} hours).")
 
     BATCHES_DIR.mkdir(exist_ok=True, parents=True)
-    # Clear out any old batch files from a previous run.
     for old_file in BATCHES_DIR.glob("batch_*.csv"):
         old_file.unlink()
 
