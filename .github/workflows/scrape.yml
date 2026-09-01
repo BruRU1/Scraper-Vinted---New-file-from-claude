@@ -6,7 +6,7 @@ on:
 jobs:
   scrape:
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 120
     outputs:
       has_batches: ${{ steps.split.outputs.has_batches }}
     steps:
@@ -42,7 +42,7 @@ jobs:
   check-batches:
     needs: scrape
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 120
     strategy:
       matrix:
         batch: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17]
@@ -75,7 +75,7 @@ jobs:
   merge-and-analyze:
     needs: check-batches
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 120
     steps:
       - name: Check out repo
         uses: actions/checkout@v4
