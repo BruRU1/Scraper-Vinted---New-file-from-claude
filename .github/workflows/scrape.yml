@@ -42,7 +42,7 @@ jobs:
   check-batches:
     needs: scrape
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 120
     strategy:
       matrix:
         batch: [0, 1, 2, 3, 4]
@@ -75,7 +75,7 @@ jobs:
   merge-and-analyze:
     needs: check-batches
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 120
     steps:
       - name: Check out repo
         uses: actions/checkout@v4
