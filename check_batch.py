@@ -44,7 +44,7 @@ BATCHES_DIR = DATA_DIR / "batches"
 
 # Never check more than this many listings in one batch job, even if more
 # were assigned. Keeps each job comfortably inside its timeout.
-MAX_PER_BATCH = 1000
+MAX_PER_BATCH = 3000
 
 # How many Playwright pages run concurrently within this one batch job.
 # Each page works through its own slice of the batch independently.
