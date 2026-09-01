@@ -5,21 +5,23 @@ Checks a single batch of listings (produced by split_batches.py) and
 writes the results to its own results CSV. Designed to be run as one leg
 of a GitHub Actions matrix job, so N batches run in parallel.
 
-Two safety measures:
+On top of that job-level parallelism, this version also runs multiple
+Playwright pages CONCURRENTLY within a single batch job (CONCURRENT_PAGES
+of them), instead of checking listings one at a time. Each page works
+through its own slice of the batch independently. This multiplies
+throughput within each already-parallel batch job, rather than needing
+more GitHub Actions jobs (which are capped) to go faster.
+
+Safety measures kept from before:
   - MAX_PER_BATCH caps how many listings this batch will check, even if
-    more were assigned to it. Anything over the cap is simply left
-    unchecked this run - it stays "likely_sold_or_removed" and will be
-    picked up by a future run instead (as long as it's still within the
-    recency window in split_batches.py).
-  - Results are written incrementally (every SAVE_EVERY listings), not
-    only at the very end, so a timeout partway through still keeps
-    whatever progress was made instead of losing the whole batch.
+    more were assigned to it. Anything over the cap is picked up by a
+    future run instead (within the recency window in split_batches.py).
+  - Results are written incrementally, not only at the very end, so a
+    timeout partway through still keeps whatever progress was made.
 
 Takes the batch number as a command-line argument:
 
     python check_batch.py 0
-    python check_batch.py 1
-    ... etc
 
 Reads:   data/batches/batch_{N}.csv        (listing_id, url pairs to check)
 Writes:  data/batches/results_{N}.csv      (full updated row data for each)
@@ -28,6 +30,7 @@ Writes:  data/batches/results_{N}.csv      (full updated row data for each)
 import csv
 import random
 import sys
+import threading
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -39,25 +42,108 @@ ROOT = Path(__file__).parent
 DATA_DIR = ROOT / "data"
 BATCHES_DIR = DATA_DIR / "batches"
 
-# Safety cap: never check more than this many listings in one batch, even
-# if more were assigned to it. Keeps every batch comfortably inside the
-# job's timeout regardless of how big a backlog spike is.
+# Never check more than this many listings in one batch job, even if more
+# were assigned. Keeps each job comfortably inside its timeout.
 MAX_PER_BATCH = 1000
 
-# Write results to disk every N listings, not just once at the very end,
-# so a timeout doesn't discard everything that batch already checked.
+# How many Playwright pages run concurrently within this one batch job.
+# Each page works through its own slice of the batch independently.
+# Higher = faster, but more simultaneous requests to Vinted from this one
+# job - start conservative and raise it once you've confirmed no
+# rate-limiting issues show up.
+CONCURRENT_PAGES = 5
+
+# Write results to disk every N listings checked (across all pages
+# combined), not just once at the very end.
 SAVE_EVERY = 50
 
 RESULT_COLUMNS = ["listing_id", "status", "sold_price", "sold_confirmed_at",
                   "consecutive_misses", "date_disappeared", "last_seen"]
 
+# Shared state across worker threads - protected by results_lock.
+results = []
+results_lock = threading.Lock()
+checked_count = 0
 
-def write_results(results_path, results):
+
+def build_result(listing_id, outcome, sold_price, now_iso):
+    if outcome == "sold":
+        return {
+            "listing_id": listing_id,
+            "status": "confirmed_sold",
+            "sold_price": sold_price or "",
+            "sold_confirmed_at": now_iso,
+            "consecutive_misses": "",
+            "date_disappeared": "",
+            "last_seen": "",
+        }
+    elif outcome == "active":
+        return {
+            "listing_id": listing_id,
+            "status": "active",
+            "sold_price": "",
+            "sold_confirmed_at": "",
+            "consecutive_misses": "0",
+            "date_disappeared": "",
+            "last_seen": now_iso,
+        }
+    else:  # gone
+        return {
+            "listing_id": listing_id,
+            "status": "deleted",
+            "sold_price": "",
+            "sold_confirmed_at": "",
+            "consecutive_misses": "",
+            "date_disappeared": now_iso,
+            "last_seen": "",
+        }
+
+
+def write_results(results_path):
+    with results_lock:
+        snapshot = list(results)
     with open(results_path, "w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=RESULT_COLUMNS)
         writer.writeheader()
-        for row in results:
+        for row in snapshot:
             writer.writerow(row)
+
+
+def worker(worker_id, rows, browser, batch_num, total, results_path):
+    global checked_count
+
+    context = browser.new_context(user_agent=USER_AGENT)
+    page = context.new_page()
+
+    for row in rows:
+        url = row["url"]
+        listing_id = row["listing_id"]
+
+        outcome, sold_price = check_listing_page(page, url)
+        now_iso = datetime.now(timezone.utc).isoformat()
+        result = build_result(listing_id, outcome, sold_price, now_iso)
+
+        with results_lock:
+            results.append(result)
+            global_checked = len(results)
+
+        print(f"  [{batch_num}/p{worker_id}] ({global_checked}/{total}) "
+              f"{listing_id} -> {outcome.upper()}"
+              + (f" (£{sold_price})" if sold_price else ""))
+
+        if global_checked % SAVE_EVERY == 0:
+            write_results(results_path)
+            print(f"    (progress saved: {global_checked} so far)")
+
+        time.sleep(random.uniform(2, 5))
+
+    context.close()
+
+
+def split_for_workers(items, n):
+    """Divide items into n roughly-equal chunks for the worker pages."""
+    k, m = divmod(len(items), n)
+    return [items[i * k + min(i, m):(i + 1) * k + min(i + 1, m)] for i in range(n)]
 
 
 def main():
@@ -79,67 +165,34 @@ def main():
     else:
         print(f"Batch {batch_num}: {len(batch)} listings to check.")
 
-    results = []
+    if not batch:
+        write_results(results_path)
+        print(f"Batch {batch_num}: nothing to check.")
+        return
 
-    if batch:
-        with sync_playwright() as p:
-            browser = p.chromium.launch(headless=True)
-            context = browser.new_context(user_agent=USER_AGENT)
-            page = context.new_page()
+    chunks = split_for_workers(batch, CONCURRENT_PAGES)
+    total = len(batch)
 
-            for i, row in enumerate(batch, start=1):
-                url = row["url"]
-                listing_id = row["listing_id"]
-                print(f"  [{batch_num}] ({i}/{len(batch)}) Checking {listing_id} -> {url}")
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
 
-                outcome, sold_price = check_listing_page(page, url)
-                now_iso = datetime.now(timezone.utc).isoformat()
+        threads = []
+        for worker_id, chunk in enumerate(chunks):
+            if not chunk:
+                continue
+            t = threading.Thread(
+                target=worker,
+                args=(worker_id, chunk, browser, batch_num, total, results_path),
+            )
+            t.start()
+            threads.append(t)
 
-                if outcome == "sold":
-                    results.append({
-                        "listing_id": listing_id,
-                        "status": "confirmed_sold",
-                        "sold_price": sold_price or "",
-                        "sold_confirmed_at": now_iso,
-                        "consecutive_misses": "",
-                        "date_disappeared": "",
-                        "last_seen": "",
-                    })
-                    print(f"    -> SOLD (price: {sold_price})")
+        for t in threads:
+            t.join()
 
-                elif outcome == "active":
-                    results.append({
-                        "listing_id": listing_id,
-                        "status": "active",
-                        "sold_price": "",
-                        "sold_confirmed_at": "",
-                        "consecutive_misses": "0",
-                        "date_disappeared": "",
-                        "last_seen": now_iso,
-                    })
-                    print(f"    -> still ACTIVE (was buried, not gone)")
+        browser.close()
 
-                else:  # gone
-                    results.append({
-                        "listing_id": listing_id,
-                        "status": "deleted",
-                        "sold_price": "",
-                        "sold_confirmed_at": "",
-                        "consecutive_misses": "",
-                        "date_disappeared": now_iso,
-                        "last_seen": "",
-                    })
-                    print(f"    -> DELETED (404/error, unconfirmed)")
-
-                if i % SAVE_EVERY == 0:
-                    write_results(results_path, results)
-                    print(f"    (progress saved: {len(results)} so far)")
-
-                time.sleep(random.uniform(2, 5))
-
-            browser.close()
-
-    write_results(results_path, results)
+    write_results(results_path)
     print(f"Batch {batch_num} done. Wrote {len(results)} results to {results_path}")
 
 
