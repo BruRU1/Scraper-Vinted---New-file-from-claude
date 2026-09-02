@@ -91,12 +91,17 @@ def main():
 
         keep_rows.append(row)
 
+    # Always make sure the archive file exists, even with 0 rows to add
+    # this run - the workflow's `git add data/listings_archive.csv` fails
+    # outright ("pathspec did not match any files") if the path doesn't
+    # exist at all yet.
+    if not ARCHIVE_PATH.exists():
+        with open(ARCHIVE_PATH, "w", newline="", encoding="utf-8") as f:
+            csv.DictWriter(f, fieldnames=LISTINGS_COLUMNS).writeheader()
+
     if archive_rows:
-        write_header = not ARCHIVE_PATH.exists()
         with open(ARCHIVE_PATH, "a", newline="", encoding="utf-8") as f:
             writer = csv.DictWriter(f, fieldnames=LISTINGS_COLUMNS)
-            if write_header:
-                writer.writeheader()
             for row in archive_rows:
                 writer.writerow(row)
 
