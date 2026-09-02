@@ -48,6 +48,7 @@ EXTRACT_JS_PATH = ROOT / "extract.js"
 DATA_DIR = ROOT / "data"
 LISTINGS_PATH = DATA_DIR / "listings.csv"
 HISTORY_PATH = DATA_DIR / "price_history.csv"
+NEWLY_FLAGGED_PATH = DATA_DIR / "newly_flagged.csv"
 
 # Number of consecutive runs a previously-active listing must be absent
 # from before we flag it as likely sold/removed. Keeps a single missed
@@ -242,7 +243,11 @@ def reconcile(listings_by_url, next_id, scraped_listing, category_name, now_iso)
 
 def mark_missing_listings(listings_by_url, seen_urls_this_run, now_iso):
     """Any listing still marked active that wasn't seen this run gets its
-    miss counter bumped; past the threshold it's flagged as likely gone."""
+    miss counter bumped; past the threshold it's flagged as likely gone.
+    Returns the list of (listing_id, url) pairs newly flagged THIS run -
+    used downstream so the sold-checker only ever looks at fresh flags,
+    never the historical backlog."""
+    newly_flagged = []
     for url, row in listings_by_url.items():
         if url in seen_urls_this_run:
             continue
@@ -253,6 +258,9 @@ def mark_missing_listings(listings_by_url, seen_urls_this_run, now_iso):
         if row["consecutive_misses"] >= MISSING_RUNS_THRESHOLD:
             row["status"] = "likely_sold_or_removed"
             row["date_disappeared"] = now_iso
+            newly_flagged.append((row["listing_id"], url))
+
+    return newly_flagged
 
 
 def scrape():
@@ -326,16 +334,23 @@ def scrape():
         browser.close()
 
     run_time = datetime.now(timezone.utc).isoformat()
-    mark_missing_listings(listings_by_url, seen_urls_this_run, run_time)
+    newly_flagged = mark_missing_listings(listings_by_url, seen_urls_this_run, run_time)
 
     save_listings(listings_by_url)
     append_history(history_rows)
+
+    with open(NEWLY_FLAGGED_PATH, "w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=["listing_id", "url"])
+        writer.writeheader()
+        for listing_id, url in newly_flagged:
+            writer.writerow({"listing_id": listing_id, "url": url})
 
     print(
         f"\nDone. {total_new} new listings, {total_updated} existing listings "
         f"refreshed, {total_price_changes} price changes recorded, "
         f"{total_errors} errors."
     )
+    print(f"{len(newly_flagged)} listings newly flagged likely_sold_or_removed this run.")
 
 
 if __name__ == "__main__":
