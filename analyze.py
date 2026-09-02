@@ -55,7 +55,8 @@ GROUP_STATS_COLUMNS = [
     "min_price",
     "max_price",
     "avg_days_listed",       # for still-active listings: now - first_seen
-    "avg_days_to_disappear",  # for listings marked likely_sold_or_removed: date_disappeared - first_seen
+    "avg_days_to_disappear",  # for confirmed_sold/deleted/likely_sold_or_removed
+                              # listings: (sold/disappeared time) - first_seen
 ]
 
 DEALS_COLUMNS = [
@@ -125,7 +126,12 @@ def compute_group_stats(groups, now):
     for key, rows in groups.items():
         brand, category, condition, size = key
 
-        prices = [parse_price(r.get("current_price")) for r in rows]
+        # Only currently-active listings represent real, current asking
+        # prices. Including confirmed_sold/deleted rows here would mix in
+        # stale prices from listings no longer actually available, which
+        # gets worse over time as more listings get confirmed gone.
+        active_rows = [r for r in rows if r.get("status") == "active"]
+        prices = [parse_price(r.get("current_price")) for r in active_rows]
         prices = [p for p in prices if p is not None]
 
         if len(prices) < MIN_SAMPLE_SIZE:
@@ -139,9 +145,14 @@ def compute_group_stats(groups, now):
             if first_seen is None:
                 continue
 
-            if r.get("status") == "active":
+            status = r.get("status")
+            if status == "active":
                 days_listed_values.append((now - first_seen).days)
-            elif r.get("status") == "likely_sold_or_removed":
+            elif status == "confirmed_sold":
+                sold_at = parse_dt(r.get("sold_confirmed_at"))
+                if sold_at:
+                    days_to_disappear_values.append((sold_at - first_seen).days)
+            elif status in ("deleted", "likely_sold_or_removed"):
                 disappeared = parse_dt(r.get("date_disappeared"))
                 if disappeared:
                     days_to_disappear_values.append((disappeared - first_seen).days)

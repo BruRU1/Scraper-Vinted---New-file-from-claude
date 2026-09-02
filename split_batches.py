@@ -1,20 +1,20 @@
 """
 split_batches.py
 
-Reads data/newly_flagged.csv - the EXACT list of listings scraper.py just
-flagged "likely_sold_or_removed" during this run (written by scraper.py
-itself at the end of its run) - and splits them into N batch files for
-parallel checking.
+Selects listings still marked "likely_sold_or_removed" and splits them
+into N batch files for parallel checking.
 
-This deliberately does NOT scan the full listings.csv or use any time
-window. It only ever processes what was newly flagged in the run that
-just happened. The historical backlog (everything flagged in past runs)
-is left untouched - that's a separate problem to tackle later, not
-something this script does automatically.
+Always takes the OLDEST unconfirmed listings first (by date_disappeared),
+up to TOTAL_CAP_PER_RUN for this run. This treats every likely-gone
+listing the same way, whether it was flagged this run or months ago -
+there's no separate "backlog" concept, just one queue, oldest first. That
+guarantees steady forward progress through the whole backlog every run,
+regardless of how much or little was newly flagged, and nothing can
+silently fall out of scope waiting for a narrower time window.
 
 Run manually:  python split_batches.py
-(In the automated workflow, this runs right after scraper.py, reading
-the file scraper.py just wrote.)
+(In the automated workflow, this runs right after scraper.py, against
+whatever scraper.py just committed to data/listings.csv.)
 """
 
 import csv
@@ -23,41 +23,55 @@ from pathlib import Path
 
 ROOT = Path(__file__).parent
 DATA_DIR = ROOT / "data"
-NEWLY_FLAGGED_PATH = DATA_DIR / "newly_flagged.csv"
+LISTINGS_PATH = DATA_DIR / "listings.csv"
 BATCHES_DIR = DATA_DIR / "batches"
 
 NUM_BATCHES = 18
+
+# Total listings to process in one run, across all batches combined.
+# Keep this in line with what NUM_BATCHES x MAX_PER_BATCH in
+# check_batch.py can comfortably handle within the job timeout.
+TOTAL_CAP_PER_RUN = 18000
 
 BATCH_COLUMNS = ["listing_id", "url"]
 
 
 def main():
-    if not NEWLY_FLAGGED_PATH.exists():
-        print(f"No {NEWLY_FLAGGED_PATH} found - did scraper.py run first?")
-        newly_flagged = []
-    else:
-        with open(NEWLY_FLAGGED_PATH, "r", newline="", encoding="utf-8") as f:
-            newly_flagged = list(csv.DictReader(f))
+    with open(LISTINGS_PATH, "r", newline="", encoding="utf-8") as f:
+        listings = list(csv.DictReader(f))
 
-    print(f"Found {len(newly_flagged)} listings newly flagged this run.")
+    unconfirmed = [row for row in listings if row.get("status") == "likely_sold_or_removed"]
+
+    print(f"Loaded {len(listings)} total listings.")
+    print(f"Found {len(unconfirmed)} listings still marked likely_sold_or_removed.")
+
+    # Oldest-flagged first (blank date_disappeared sorts last, not first,
+    # so it doesn't jump the queue ahead of dated ones).
+    unconfirmed.sort(key=lambda r: r.get("date_disappeared") or "9999")
+
+    to_check = unconfirmed[:TOTAL_CAP_PER_RUN]
+    print(f"Processing {len(to_check)} this run (oldest-flagged first, "
+          f"cap {TOTAL_CAP_PER_RUN}).")
+    if len(unconfirmed) > TOTAL_CAP_PER_RUN:
+        print(f"  {len(unconfirmed) - TOTAL_CAP_PER_RUN} remain for future runs.")
 
     BATCHES_DIR.mkdir(exist_ok=True, parents=True)
     for old_file in BATCHES_DIR.glob("batch_*.csv"):
         old_file.unlink()
 
-    if not newly_flagged:
+    if not to_check:
         print("Nothing to check - writing empty batch files.")
         for i in range(NUM_BATCHES):
             with open(BATCHES_DIR / f"batch_{i}.csv", "w", newline="", encoding="utf-8") as f:
                 csv.DictWriter(f, fieldnames=BATCH_COLUMNS).writeheader()
         return
 
-    batch_size = math.ceil(len(newly_flagged) / NUM_BATCHES)
+    batch_size = math.ceil(len(to_check) / NUM_BATCHES)
 
     for i in range(NUM_BATCHES):
         start = i * batch_size
         end = start + batch_size
-        batch_rows = newly_flagged[start:end]
+        batch_rows = to_check[start:end]
 
         with open(BATCHES_DIR / f"batch_{i}.csv", "w", newline="", encoding="utf-8") as f:
             writer = csv.DictWriter(f, fieldnames=BATCH_COLUMNS)

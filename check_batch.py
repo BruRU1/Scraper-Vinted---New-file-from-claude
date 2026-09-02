@@ -7,15 +7,25 @@ of a GitHub Actions matrix job, so N batches run in parallel.
 
 On top of that job-level parallelism, this version also runs multiple
 Playwright pages CONCURRENTLY within a single batch job (CONCURRENT_PAGES
-of them), instead of checking listings one at a time. Each page works
-through its own slice of the batch independently. This multiplies
-throughput within each already-parallel batch job, rather than needing
-more GitHub Actions jobs (which are capped) to go faster.
+of them), instead of checking listings one at a time. Each worker thread
+launches its OWN independent Playwright browser instance and works
+through its own slice of the batch. This multiplies throughput within
+each already-parallel batch job, rather than needing more GitHub Actions
+jobs (which are capped) to go faster.
+
+IMPORTANT: each thread must launch its own Playwright/browser instance.
+Playwright's sync API is not thread-safe - a browser created in one
+thread cannot be driven from another thread (it fails immediately with
+"greenlet.error: cannot switch to a different thread"). An earlier
+version of this file shared one browser across all worker threads, which
+silently failed every single check (each batch "completed" in ~1 second
+having checked nothing). Do not go back to a shared browser.
 
 Safety measures kept from before:
   - MAX_PER_BATCH caps how many listings this batch will check, even if
-    more were assigned to it. Anything over the cap is picked up by a
-    future run instead (within the recency window in split_batches.py).
+    more were assigned to it. Anything over the cap just stays queued -
+    split_batches.py always re-selects the oldest unconfirmed listings
+    each run, so nothing is skipped forever, it just takes another run.
   - Results are written incrementally, not only at the very end, so a
     timeout partway through still keeps whatever progress was made.
 
@@ -63,7 +73,6 @@ RESULT_COLUMNS = ["listing_id", "status", "sold_price", "sold_confirmed_at",
 # Shared state across worker threads - protected by results_lock.
 results = []
 results_lock = threading.Lock()
-checked_count = 0
 
 
 def build_result(listing_id, outcome, sold_price, now_iso):
@@ -109,35 +118,39 @@ def write_results(results_path):
             writer.writerow(row)
 
 
-def worker(worker_id, rows, browser, batch_num, total, results_path):
-    global checked_count
+def worker(worker_id, rows, batch_num, total, results_path):
+    # Each worker thread gets its own Playwright driver + browser. Sharing
+    # one browser (created in the main thread) across threads doesn't
+    # work with Playwright's sync API - see module docstring.
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        context = browser.new_context(user_agent=USER_AGENT)
+        page = context.new_page()
 
-    context = browser.new_context(user_agent=USER_AGENT)
-    page = context.new_page()
+        for row in rows:
+            url = row["url"]
+            listing_id = row["listing_id"]
 
-    for row in rows:
-        url = row["url"]
-        listing_id = row["listing_id"]
+            outcome, sold_price = check_listing_page(page, url)
+            now_iso = datetime.now(timezone.utc).isoformat()
+            result = build_result(listing_id, outcome, sold_price, now_iso)
 
-        outcome, sold_price = check_listing_page(page, url)
-        now_iso = datetime.now(timezone.utc).isoformat()
-        result = build_result(listing_id, outcome, sold_price, now_iso)
+            with results_lock:
+                results.append(result)
+                global_checked = len(results)
 
-        with results_lock:
-            results.append(result)
-            global_checked = len(results)
+            print(f"  [{batch_num}/p{worker_id}] ({global_checked}/{total}) "
+                  f"{listing_id} -> {outcome.upper()}"
+                  + (f" (£{sold_price})" if sold_price else ""))
 
-        print(f"  [{batch_num}/p{worker_id}] ({global_checked}/{total}) "
-              f"{listing_id} -> {outcome.upper()}"
-              + (f" (£{sold_price})" if sold_price else ""))
+            if global_checked % SAVE_EVERY == 0:
+                write_results(results_path)
+                print(f"    (progress saved: {global_checked} so far)")
 
-        if global_checked % SAVE_EVERY == 0:
-            write_results(results_path)
-            print(f"    (progress saved: {global_checked} so far)")
+            time.sleep(random.uniform(2, 5))
 
-        time.sleep(random.uniform(2, 5))
-
-    context.close()
+        context.close()
+        browser.close()
 
 
 def split_for_workers(items, n):
@@ -173,24 +186,19 @@ def main():
     chunks = split_for_workers(batch, CONCURRENT_PAGES)
     total = len(batch)
 
-    with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True)
+    threads = []
+    for worker_id, chunk in enumerate(chunks):
+        if not chunk:
+            continue
+        t = threading.Thread(
+            target=worker,
+            args=(worker_id, chunk, batch_num, total, results_path),
+        )
+        t.start()
+        threads.append(t)
 
-        threads = []
-        for worker_id, chunk in enumerate(chunks):
-            if not chunk:
-                continue
-            t = threading.Thread(
-                target=worker,
-                args=(worker_id, chunk, browser, batch_num, total, results_path),
-            )
-            t.start()
-            threads.append(t)
-
-        for t in threads:
-            t.join()
-
-        browser.close()
+    for t in threads:
+        t.join()
 
     write_results(results_path)
     print(f"Batch {batch_num} done. Wrote {len(results)} results to {results_path}")

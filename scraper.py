@@ -24,10 +24,18 @@ listing_id. Existing listings have their current data refreshed; if the
 price changed, listings.csv's summary columns are updated AND a row is
 appended to price_history.csv.
 
-A listing that isn't seen for 2 consecutive runs is marked
+A listing that isn't seen for MISSING_RUNS_THRESHOLD consecutive runs
+(currently 3, i.e. ~18 hours at the 6-hourly schedule) is marked
 "likely_sold_or_removed" (never "sold" - we can't know that for certain).
 If it reappears later (Vinted allows relisting), it's reactivated under
 the SAME listing_id rather than getting a new one.
+
+Every "likely_sold_or_removed" listing eventually gets its actual listing
+page visited directly (see split_batches.py -> check_batch.py ->
+merge_batches.py) to confirm what really happened - sold, still active
+(just buried past the pages we scrape), or genuinely deleted. So an
+overly-eager flag here isn't permanent: it gets corrected automatically
+the next time the batch checker reaches it.
 
 Run manually:      python scraper.py
 Run automatically:  triggered on a schedule by .github/workflows/scrape.yml
@@ -48,7 +56,6 @@ EXTRACT_JS_PATH = ROOT / "extract.js"
 DATA_DIR = ROOT / "data"
 LISTINGS_PATH = DATA_DIR / "listings.csv"
 HISTORY_PATH = DATA_DIR / "price_history.csv"
-NEWLY_FLAGGED_PATH = DATA_DIR / "newly_flagged.csv"
 
 # Number of consecutive runs a previously-active listing must be absent
 # from before we flag it as likely sold/removed. Keeps a single missed
@@ -244,9 +251,9 @@ def reconcile(listings_by_url, next_id, scraped_listing, category_name, now_iso)
 def mark_missing_listings(listings_by_url, seen_urls_this_run, now_iso):
     """Any listing still marked active that wasn't seen this run gets its
     miss counter bumped; past the threshold it's flagged as likely gone.
-    Returns the list of (listing_id, url) pairs newly flagged THIS run -
-    used downstream so the sold-checker only ever looks at fresh flags,
-    never the historical backlog."""
+    Returns the list of (listing_id, url) pairs newly flagged THIS run,
+    for logging - split_batches.py doesn't rely on this list, it pulls
+    the full likely_sold_or_removed queue straight from listings.csv."""
     newly_flagged = []
     for url, row in listings_by_url.items():
         if url in seen_urls_this_run:
@@ -338,12 +345,6 @@ def scrape():
 
     save_listings(listings_by_url)
     append_history(history_rows)
-
-    with open(NEWLY_FLAGGED_PATH, "w", newline="", encoding="utf-8") as f:
-        writer = csv.DictWriter(f, fieldnames=["listing_id", "url"])
-        writer.writeheader()
-        for listing_id, url in newly_flagged:
-            writer.writerow({"listing_id": listing_id, "url": url})
 
     print(
         f"\nDone. {total_new} new listings, {total_updated} existing listings "
