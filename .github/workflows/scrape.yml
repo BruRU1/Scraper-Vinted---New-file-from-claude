@@ -91,6 +91,18 @@ jobs:
     steps:
       - name: Check out repo
         uses: actions/checkout@v4
+        with:
+          # Without this, checkout uses the commit main was on when the
+          # WHOLE workflow was triggered - not the live tip of main right
+          # now. The scrape job (which runs first, and can take an hour)
+          # commits its own changes to main partway through the run, so
+          # by the time this job starts, that pinned commit is already
+          # stale - it's missing this run's own earlier scrape. This job
+          # rewrites data/listings.csv in full, so working from a stale
+          # base guarantees a merge conflict against what scrape already
+          # pushed. `ref: main` forces a fresh resolve of main's actual
+          # current tip at checkout time instead of reusing the stale one.
+          ref: main
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
