@@ -22,46 +22,12 @@ For a given listing URL, visiting the page tells us one of three things:
                "likely_sold_or_removed" guess, since this one was actually
                visited and confirmed unreachable, not just inferred.
 
-This module doesn't run on its own - it's imported by:
-  - check_sold_backlog.py   (one-time pass over the existing backlog)
-  - check_sold_new.py       (ongoing - only listings newly flagged this run)
+This module doesn't run on its own - check_listing_page() is imported and
+driven by check_batch.py, which is run as one leg of a GitHub Actions
+matrix job (see split_batches.py -> check_batch.py -> merge_batches.py).
 """
 
-import csv
 import re
-from datetime import datetime, timezone
-from pathlib import Path
-
-from playwright.sync_api import sync_playwright
-
-ROOT = Path(__file__).parent
-EXTRACT_JS_PATH = ROOT / "extract.js"
-DATA_DIR = ROOT / "data"
-LISTINGS_PATH = DATA_DIR / "listings.csv"
-
-LISTINGS_COLUMNS = [
-    "listing_id",
-    "url",
-    "platform",
-    "category",
-    "title",
-    "current_price",
-    "original_price",
-    "price_drops",
-    "last_price_change",
-    "currency",
-    "brand",
-    "size",
-    "condition",
-    "imageUrl",
-    "first_seen",
-    "last_seen",
-    "status",
-    "date_disappeared",
-    "consecutive_misses",
-    "sold_price",
-    "sold_confirmed_at",
-]
 
 USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
@@ -78,20 +44,6 @@ SOLD_BADGE_SELECTOR = "div.web_ui__Cell__body"
 #   <p class="web_ui__Text__text web_ui__Text__subtitle web_ui__Text__left">£4.00</p>
 PRICE_SELECTOR = "p.web_ui__Text__subtitle"
 PRICE_PATTERN = re.compile(r"[\d,]+\.?\d*")
-
-
-def load_listings():
-    with open(LISTINGS_PATH, "r", newline="", encoding="utf-8") as f:
-        reader = csv.DictReader(f)
-        return list(reader)
-
-
-def save_listings(listings):
-    with open(LISTINGS_PATH, "w", newline="", encoding="utf-8") as f:
-        writer = csv.DictWriter(f, fieldnames=LISTINGS_COLUMNS)
-        writer.writeheader()
-        for row in listings:
-            writer.writerow(row)
 
 
 def check_listing_page(page, url):
@@ -129,63 +81,3 @@ def check_listing_page(page, url):
     except Exception as e:
         print(f"    ! error visiting {url}: {e}")
         return "gone", None
-
-
-def process_listings(listing_rows, listings_by_id):
-    """
-    Visits each listing in listing_rows (a list of row dicts referencing
-    listings_by_id), updates listings_by_id in place, and returns counts.
-    """
-    counts = {"sold": 0, "reactivated": 0, "gone_unconfirmed": 0, "checked": 0}
-
-    with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True)
-        context = browser.new_context(user_agent=USER_AGENT)
-        page = context.new_page()
-
-        for row in listing_rows:
-            url = row.get("url")
-            listing_id = row.get("listing_id")
-            if not url or not listing_id:
-                continue
-
-            print(f"  Checking listing {listing_id} -> {url}")
-            outcome, sold_price = check_listing_page(page, url)
-            counts["checked"] += 1
-            now_iso = datetime.now(timezone.utc).isoformat()
-
-            target = listings_by_id.get(listing_id)
-            if target is None:
-                continue
-
-            if outcome == "sold":
-                target["status"] = "confirmed_sold"
-                target["sold_price"] = sold_price or ""
-                target["sold_confirmed_at"] = now_iso
-                counts["sold"] += 1
-                print(f"    -> SOLD (price: {sold_price})")
-
-            elif outcome == "active":
-                target["status"] = "active"
-                target["consecutive_misses"] = 0
-                target["date_disappeared"] = ""
-                target["last_seen"] = now_iso
-                counts["reactivated"] += 1
-                print(f"    -> still ACTIVE (was buried, not gone)")
-
-            else:  # gone
-                # Distinct from confirmed_sold and from the historical
-                # unconfirmed likely_sold_or_removed guesses - this is a
-                # page that 404'd/errored when actually visited.
-                target["status"] = "deleted"
-                target["date_disappeared"] = target.get("date_disappeared") or now_iso
-                counts["gone_unconfirmed"] += 1
-                print(f"    -> DELETED (404/error, unconfirmed)")
-
-            import random
-            import time
-            time.sleep(random.uniform(2, 5))
-
-        browser.close()
-
-    return counts
