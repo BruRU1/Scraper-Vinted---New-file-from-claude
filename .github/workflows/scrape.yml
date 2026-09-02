@@ -3,6 +3,18 @@ on:
   schedule:
     - cron: "0 */6 * * *"
   workflow_dispatch: {}
+
+# Only ever run one Vinted Scraper workflow at a time. Without this, an
+# overlapping run (the 6-hourly schedule firing while a manual run is
+# still going, or two manual runs close together) races the other one to
+# push data/listings.csv - whichever finishes its commit-and-push last
+# hits a merge conflict and fails, discarding a whole run's work.
+# cancel-in-progress: false means a second trigger waits in a queue for
+# the current run to finish, rather than being dropped or fighting it.
+concurrency:
+  group: vinted-scraper
+  cancel-in-progress: false
+
 jobs:
   scrape:
     runs-on: ubuntu-latest
