@@ -44,6 +44,17 @@ MIN_SAMPLE_SIZE = 5
 # (as a fraction, e.g. 0.20 = 20% below) to get flagged as a deal.
 DEAL_THRESHOLD_PCT = 0.20
 
+# Categories named "brand_*" in categories.json are plain keyword searches
+# (search_text=Supreme, search_text=Palace, etc.), which match ANY listing
+# whose title/description mentions that word - not just real clothing from
+# that brand. In practice this pulls in things like novels with "Palace"
+# in the title, or household junk tagged "Supreme" by mistake, usually
+# priced far below what a genuine item would go for. Real Vinted category
+# browses (jeans, outerwear, etc.) don't have this problem, since Vinted's
+# own category filter already did that work - so the floor only applies
+# to "brand_*" categories.
+BRAND_SEARCH_MIN_PRICE = 3.0
+
 GROUP_STATS_COLUMNS = [
     "brand",
     "category",
@@ -98,6 +109,16 @@ def normalize(value):
     return value if value else "unknown"
 
 
+def passes_price_floor(category, price):
+    """False for a "brand_*" (keyword-search) category priced below the
+    floor - almost certainly not a genuine item of that brand, just
+    something that happened to mention the word. Leaves real category
+    browses and anything without a parseable price untouched."""
+    if price is None or not category.startswith("brand_"):
+        return True
+    return price >= BRAND_SEARCH_MIN_PRICE
+
+
 def load_listings():
     with open(LISTINGS_PATH, "r", newline="", encoding="utf-8") as f:
         reader = csv.DictReader(f)
@@ -125,6 +146,14 @@ def compute_group_stats(groups, now):
 
     for key, rows in groups.items():
         brand, category, condition, size = key
+
+        # Drop likely-junk keyword-search matches (see passes_price_floor)
+        # before computing anything, so they can't skew this group's
+        # average/median/days stats either.
+        rows = [
+            r for r in rows
+            if passes_price_floor(category, parse_price(r.get("current_price")))
+        ]
 
         # Only currently-active listings represent real, current asking
         # prices. Including confirmed_sold/deleted rows here would mix in
@@ -206,6 +235,9 @@ def find_deals(listings, group_avg_lookup, now):
         price = parse_price(row.get("current_price"))
         if price is None or group_avg <= 0:
             continue
+
+        if not passes_price_floor(key[1], price):
+            continue  # likely a keyword-search junk match, not a real deal
 
         pct_below = (group_avg - price) / group_avg
         if pct_below < DEAL_THRESHOLD_PCT:
