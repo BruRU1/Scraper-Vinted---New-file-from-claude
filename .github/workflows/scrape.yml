@@ -22,6 +22,18 @@ jobs:
     steps:
       - name: Check out repo
         uses: actions/checkout@v4
+        with:
+          # Without this, checkout uses the commit main was on when the
+          # workflow was queued, not the live tip at the moment this job
+          # actually starts. The concurrency guard above can queue a run
+          # for a long time behind a previous one - by the time it starts,
+          # the previous run's own final push may already be on main, and
+          # this job's commit step would otherwise be building on a stale
+          # base and collide with it. `ref: main` forces a fresh resolve
+          # of main's actual current tip at checkout time. (Same fix as
+          # merge-and-analyze's checkout below - this job needs it too,
+          # since it also does a full rewrite-and-push of data/listings.csv.)
+          ref: main
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
