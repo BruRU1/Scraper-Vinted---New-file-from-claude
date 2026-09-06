@@ -31,7 +31,15 @@ NUM_BATCHES = 18
 # Total listings to process in one run, across all batches combined.
 # Keep this in line with what NUM_BATCHES x MAX_PER_BATCH in
 # check_batch.py can comfortably handle within the job timeout.
-TOTAL_CAP_PER_RUN = 18000
+#
+# Raised from 18000: the unconfirmed backlog has been growing faster than
+# 18000/run could resolve (and therefore archive out of listings.csv),
+# which is what let the file creep back up toward GitHub's 100MB push
+# limit. Batches of 1000 (18000/18) were taking ~20-25 min against a
+# 120-min job timeout, so there was clear headroom - 30000/18 ~= 1667 per
+# batch, still comfortably under check_batch.py's own MAX_PER_BATCH=3000
+# safety cap.
+TOTAL_CAP_PER_RUN = 30000
 
 BATCH_COLUMNS = ["listing_id", "url"]
 
