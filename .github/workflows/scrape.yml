@@ -143,13 +143,15 @@ jobs:
         run: python merge_batches.py
       - name: Run analyzer
         run: python analyze.py
+      - name: Find resale opportunities
+        run: python resale_score.py
       - name: Keep listings.csv under GitHub's file size limit
         run: python archive_resolved.py
       - name: Commit and push final data
         run: |
           git config user.name "vinted-scraper-bot"
           git config user.email "actions@users.noreply.github.com"
-          git add data/listings.csv data/group_stats.csv data/deals.csv data/listings_archive.csv
+          git add data/listings.csv data/group_stats.csv data/deals.csv data/resale_opportunities.csv data/listings_archive.csv
           git diff --quiet --cached || git commit -m "Sold-check + analytics $(date -u +'%Y-%m-%d %H:%M UTC')"
           git pull --rebase origin main
           git push origin HEAD:main

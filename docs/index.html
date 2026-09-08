@@ -1,0 +1,636 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Resale Finder</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+  :root {
+    --bg: #eef1f4;
+    --surface: #ffffff;
+    --surface-2: #f7f9fa;
+    --ink: #17232f;
+    --ink-muted: #5c6b78;
+    --ink-faint: #8a97a3;
+    --line: #d7dee4;
+    --accent: #b9822f;
+    --accent-strong: #8f6521;
+    --accent-tint: #f3e7d2;
+    --good: #2f7d6c;
+    --good-bg: #e4f2ee;
+    --shadow: 0 1px 2px rgba(23,35,47,.06), 0 6px 20px rgba(23,35,47,.06);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #10161d;
+      --surface: #1a232c;
+      --surface-2: #212c37;
+      --ink: #e7edf1;
+      --ink-muted: #93a4b1;
+      --ink-faint: #66757f;
+      --line: #2b3743;
+      --accent: #e0a94a;
+      --accent-strong: #f0bd66;
+      --accent-tint: #3a2f1a;
+      --good: #56c1ab;
+      --good-bg: #16332c;
+      --shadow: 0 1px 2px rgba(0,0,0,.3), 0 6px 24px rgba(0,0,0,.35);
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #10161d;
+    --surface: #1a232c;
+    --surface-2: #212c37;
+    --ink: #e7edf1;
+    --ink-muted: #93a4b1;
+    --ink-faint: #66757f;
+    --line: #2b3743;
+    --accent: #e0a94a;
+    --accent-strong: #f0bd66;
+    --accent-tint: #3a2f1a;
+    --good: #56c1ab;
+    --good-bg: #16332c;
+    --shadow: 0 1px 2px rgba(0,0,0,.3), 0 6px 24px rgba(0,0,0,.35);
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    background: var(--bg);
+    color: var(--ink);
+    font-family: "IBM Plex Sans", system-ui, sans-serif;
+    line-height: 1.45;
+  }
+  .wrap { max-width: 1180px; margin: 0 auto; padding: 32px 20px 64px; }
+
+  .eyebrow {
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: .08em;
+    text-transform: uppercase;
+    color: var(--accent-strong);
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .eyebrow .dot {
+    width: 7px; height: 7px; border-radius: 50%;
+    background: var(--good);
+    box-shadow: 0 0 0 3px var(--good-bg);
+  }
+  h1 {
+    font-family: "Fraunces", Georgia, serif;
+    font-weight: 600;
+    font-size: clamp(28px, 4vw, 40px);
+    margin: 6px 0 8px;
+    text-wrap: balance;
+  }
+  .lede {
+    color: var(--ink-muted);
+    max-width: 62ch;
+    font-size: 15px;
+    margin: 0 0 28px;
+  }
+  .lede a { color: var(--accent-strong); }
+
+  .kpis {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 12px;
+    margin-bottom: 28px;
+  }
+  .kpi {
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    padding: 16px 18px;
+    box-shadow: var(--shadow);
+  }
+  .kpi .label {
+    font-size: 12px;
+    color: var(--ink-muted);
+    text-transform: uppercase;
+    letter-spacing: .04em;
+    font-weight: 600;
+  }
+  .kpi .value {
+    font-family: "IBM Plex Mono", monospace;
+    font-size: 26px;
+    font-weight: 500;
+    font-variant-numeric: tabular-nums;
+    margin-top: 4px;
+  }
+  .kpi .sub { font-size: 12px; color: var(--ink-faint); margin-top: 2px; }
+
+  .panel {
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    box-shadow: var(--shadow);
+    margin-bottom: 20px;
+    overflow: hidden;
+  }
+  .panel-head {
+    padding: 16px 20px 4px;
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 12px;
+  }
+  .panel-head h2 {
+    font-family: "Fraunces", Georgia, serif;
+    font-size: 17px;
+    font-weight: 600;
+    margin: 0;
+  }
+  .panel-head .note { font-size: 12px; color: var(--ink-faint); }
+
+  .catbars { padding: 8px 20px 18px; display: flex; flex-direction: column; gap: 9px; }
+  .catbar-row { display: grid; grid-template-columns: 150px 1fr 34px; align-items: center; gap: 10px; }
+  .catbar-name { font-size: 13px; color: var(--ink-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .catbar-track { background: var(--surface-2); border-radius: 4px; height: 10px; overflow: hidden; }
+  .catbar-fill { background: var(--accent); height: 100%; border-radius: 4px; }
+  .catbar-count { font-family: "IBM Plex Mono", monospace; font-size: 12px; color: var(--ink-muted); text-align: right; font-variant-numeric: tabular-nums; }
+
+  .filters {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+    padding: 14px 20px;
+    border-bottom: 1px solid var(--line);
+    background: var(--surface-2);
+  }
+  .filters input, .filters select {
+    font: inherit;
+    font-size: 13px;
+    padding: 8px 10px;
+    border-radius: 7px;
+    border: 1px solid var(--line);
+    background: var(--surface);
+    color: var(--ink);
+  }
+  .filters input:focus, .filters select:focus, button:focus-visible, th button:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 1px;
+  }
+  .filters .search { flex: 1 1 220px; min-width: 160px; }
+  .filters .field { display: flex; flex-direction: column; gap: 3px; }
+  .filters label { font-size: 11px; color: var(--ink-faint); text-transform: uppercase; letter-spacing: .03em; }
+
+  .table-scroll { overflow-x: auto; }
+  table { width: 100%; border-collapse: collapse; font-size: 13.5px; min-width: 880px; }
+  thead th {
+    position: sticky; top: 0;
+    background: var(--surface-2);
+    text-align: left;
+    padding: 10px 14px;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: .04em;
+    color: var(--ink-muted);
+    border-bottom: 1px solid var(--line);
+    white-space: nowrap;
+  }
+  thead th button {
+    all: unset;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+  }
+  thead th button:hover { color: var(--ink); }
+  tbody td {
+    padding: 11px 14px;
+    border-bottom: 1px solid var(--line);
+    vertical-align: middle;
+  }
+  tbody tr:hover td { background: var(--surface-2); }
+  .item-title { color: var(--ink); text-decoration: none; font-weight: 500; }
+  .item-title:hover { color: var(--accent-strong); text-decoration: underline; }
+  .item-brand { display: block; font-size: 12px; color: var(--ink-muted); margin-top: 1px; }
+  .num { font-family: "IBM Plex Mono", monospace; font-variant-numeric: tabular-nums; }
+  .price-cell { white-space: nowrap; }
+  .price-arrow { color: var(--ink-faint); margin: 0 4px; }
+  .avg-price { color: var(--ink-faint); }
+  .profit { color: var(--good); font-weight: 600; }
+  .discount-bar { display: inline-block; width: 46px; height: 6px; border-radius: 3px; background: var(--surface-2); vertical-align: middle; margin-left: 8px; overflow: hidden; }
+  .discount-bar span { display: block; height: 100%; background: var(--good); border-radius: 3px; }
+
+  .score-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 3px 9px 3px 7px;
+    border-radius: 999px;
+    font-family: "IBM Plex Mono", monospace;
+    font-size: 12.5px;
+    font-weight: 500;
+    white-space: nowrap;
+  }
+  .score-pill .tier-dot { width: 6px; height: 6px; border-radius: 50%; }
+  .tier-excellent { background: var(--good-bg); color: var(--good); }
+  .tier-excellent .tier-dot { background: var(--good); }
+  .tier-good { background: var(--accent-tint); color: var(--accent-strong); }
+  .tier-good .tier-dot { background: var(--accent); }
+  .tier-fair { background: var(--surface-2); color: var(--ink-muted); }
+  .tier-fair .tier-dot { background: var(--ink-faint); }
+
+  .view-link { color: var(--ink-faint); font-size: 12px; text-decoration: none; white-space: nowrap; }
+  .view-link:hover { color: var(--accent-strong); text-decoration: underline; }
+
+  .footer-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 14px 20px;
+    font-size: 12.5px;
+    color: var(--ink-muted);
+  }
+  .more-btn {
+    font: inherit;
+    font-size: 13px;
+    font-weight: 500;
+    padding: 8px 16px;
+    border-radius: 7px;
+    border: 1px solid var(--line);
+    background: var(--surface);
+    color: var(--ink);
+    cursor: pointer;
+  }
+  .more-btn:hover { border-color: var(--accent); color: var(--accent-strong); }
+  .more-btn:disabled { opacity: .4; cursor: default; }
+
+  .caveats {
+    font-size: 12.5px;
+    color: var(--ink-muted);
+    padding: 16px 20px 20px;
+    border-top: 1px solid var(--line);
+  }
+  .caveats summary { cursor: pointer; font-weight: 600; color: var(--ink); list-style: none; }
+  .caveats summary::-webkit-details-marker { display: none; }
+  .caveats summary::before { content: "+ "; color: var(--accent); font-weight: 600; }
+  .caveats[open] summary::before { content: "\2212 "; }
+  .caveats ul { margin: 10px 0 0; padding-left: 18px; }
+  .caveats li { margin-bottom: 5px; }
+
+  .state-msg {
+    padding: 60px 20px;
+    text-align: center;
+    color: var(--ink-muted);
+    font-size: 14px;
+  }
+  .state-msg button { margin-top: 12px; }
+  .skeleton { animation: pulse 1.4s ease-in-out infinite; }
+  @keyframes pulse { 0%, 100% { opacity: .55; } 50% { opacity: 1; } }
+
+  @media (max-width: 760px) {
+    .kpis { grid-template-columns: repeat(2, 1fr); }
+    .catbar-row { grid-template-columns: 92px 1fr 30px; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <div class="eyebrow"><span class="dot"></span> Live from your Vinted scraper</div>
+  <h1>Resale Finder</h1>
+  <p class="lede">
+    Active Vinted listings priced well below what comparable items go for, ranked by
+    how underpriced they are and how quickly that group of listings historically
+    sells. Data is read straight from
+    <a href="https://github.com/BruRU1/Scraper-Vinted---New-file-from-claude" target="_blank" rel="noopener">the scraper's repo</a>
+    and refreshes automatically each time it runs.
+  </p>
+
+  <div class="kpis" id="kpis">
+    <div class="kpi"><div class="label">Opportunities</div><div class="value skeleton">&nbsp;</div></div>
+    <div class="kpi"><div class="label">Median profit</div><div class="value skeleton">&nbsp;</div></div>
+    <div class="kpi"><div class="label">Median discount</div><div class="value skeleton">&nbsp;</div></div>
+    <div class="kpi"><div class="label">Categories</div><div class="value skeleton">&nbsp;</div></div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-head">
+      <h2>Where the opportunities are</h2>
+      <span class="note">by listing count, top 8 categories</span>
+    </div>
+    <div class="catbars" id="catbars"></div>
+  </div>
+
+  <div class="panel">
+    <div class="filters">
+      <div class="field search">
+        <label for="f-search">Search</label>
+        <input id="f-search" type="text" placeholder="Brand or title, e.g. Carhartt">
+      </div>
+      <div class="field">
+        <label for="f-category">Category</label>
+        <select id="f-category"><option value="">All categories</option></select>
+      </div>
+      <div class="field">
+        <label for="f-minprofit">Min. profit (£)</label>
+        <input id="f-minprofit" type="number" min="0" step="1" value="0" style="width:90px">
+      </div>
+      <div class="field">
+        <label for="f-sort">Sort by</label>
+        <select id="f-sort">
+          <option value="score">Score</option>
+          <option value="profit">Estimated profit</option>
+          <option value="discount">Discount %</option>
+          <option value="price">Price (low to high)</option>
+        </select>
+      </div>
+    </div>
+    <div class="table-scroll">
+      <table>
+        <thead>
+          <tr>
+            <th>Score</th>
+            <th>Item</th>
+            <th>Category</th>
+            <th>Condition / size</th>
+            <th>Price</th>
+            <th>Profit</th>
+            <th>Discount</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody id="rows">
+          <tr><td colspan="8" class="state-msg">Loading live data&hellip;</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="footer-row">
+      <span id="count-note">&nbsp;</span>
+      <button class="more-btn" id="more-btn" hidden>Show 200 more</button>
+    </div>
+    <details class="caveats">
+      <summary>What this is (and isn't)</summary>
+      <ul>
+        <li><strong>"Group average"</strong> is what similar active listings are currently asking, not a proven sale price &ndash; Vinted items often sell for less after offers.</li>
+        <li><strong>Profit</strong> ignores shipping, Vinted's buyer protection fee, and your own time/effort.</li>
+        <li>Only listings from genuine Vinted category browses are included &ndash; brand keyword-search results are excluded here since they catch too much unrelated junk to safely act on.</li>
+        <li><strong>Score</strong> blends how underpriced an item is (70%) with how quickly its group has historically sold (30%) &ndash; it's a ranking, not a currency amount.</li>
+      </ul>
+    </details>
+  </div>
+
+  <p class="lede" style="font-size:12px">
+    Generated by <code>resale_score.py</code> from <code>data/listings.csv</code> analytics. See the repo's
+    <code>data/resale_opportunities.csv</code> for the full underlying table.
+  </p>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
+<script>
+(function () {
+  "use strict";
+
+  var RAW_BASE = "https://raw.githubusercontent.com/BruRU1/Scraper-Vinted---New-file-from-claude/main/data/";
+  var PAGE_SIZE = 200;
+
+  var state = {
+    all: [],
+    filtered: [],
+    shown: PAGE_SIZE,
+    sort: "score",
+    search: "",
+    category: "",
+    minProfit: 0
+  };
+
+  function loadPrefs() {
+    try {
+      var raw = localStorage.getItem("resale-finder-prefs");
+      if (!raw) return;
+      var p = JSON.parse(raw);
+      if (p.sort) state.sort = p.sort;
+      if (p.category) state.category = p.category;
+      if (typeof p.minProfit === "number") state.minProfit = p.minProfit;
+    } catch (e) { /* private mode etc - ignore */ }
+  }
+
+  function savePrefs() {
+    try {
+      localStorage.setItem("resale-finder-prefs", JSON.stringify({
+        sort: state.sort, category: state.category, minProfit: state.minProfit
+      }));
+    } catch (e) { /* ignore */ }
+  }
+
+  function titleCaseCategory(cat) {
+    var words = (cat || "").split("_");
+    return words.map(function (w) {
+      if (w === "womens") return "Women's";
+      if (!w) return w;
+      return w.charAt(0).toUpperCase() + w.slice(1);
+    }).join(" ");
+  }
+
+  function median(nums) {
+    if (!nums.length) return 0;
+    var s = nums.slice().sort(function (a, b) { return a - b; });
+    var mid = Math.floor(s.length / 2);
+    return s.length % 2 ? s[mid] : (s[mid - 1] + s[mid]) / 2;
+  }
+
+  function scoreTier(score) {
+    if (score >= 75) return { cls: "tier-excellent", label: "Excellent" };
+    if (score >= 60) return { cls: "tier-good", label: "Good" };
+    return { cls: "tier-fair", label: "Fair" };
+  }
+
+  function escapeHtml(s) {
+    return String(s == null ? "" : s).replace(/[&<>"']/g, function (c) {
+      return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c];
+    });
+  }
+
+  function renderKpis(rows) {
+    var el = document.getElementById("kpis");
+    var profits = rows.map(function (r) { return r.profit; });
+    var discounts = rows.map(function (r) { return r.pct; });
+    var cats = {};
+    rows.forEach(function (r) { cats[r.category] = true; });
+
+    el.innerHTML =
+      '<div class="kpi"><div class="label">Opportunities</div><div class="value">' + rows.length.toLocaleString() + '</div><div class="sub">active listings flagged</div></div>' +
+      '<div class="kpi"><div class="label">Median profit</div><div class="value">£' + median(profits).toFixed(2) + '</div><div class="sub">vs. group average price</div></div>' +
+      '<div class="kpi"><div class="label">Median discount</div><div class="value">' + median(discounts).toFixed(0) + '%</div><div class="sub">below group average</div></div>' +
+      '<div class="kpi"><div class="label">Categories</div><div class="value">' + Object.keys(cats).length + '</div><div class="sub">covered by these picks</div></div>';
+  }
+
+  function renderCatBars(rows) {
+    var counts = {};
+    rows.forEach(function (r) { counts[r.category] = (counts[r.category] || 0) + 1; });
+    var top = Object.keys(counts).map(function (c) { return { category: c, n: counts[c] }; })
+      .sort(function (a, b) { return b.n - a.n; }).slice(0, 8);
+    var max = top.length ? top[0].n : 1;
+
+    document.getElementById("catbars").innerHTML = top.map(function (t) {
+      var pct = Math.max(4, Math.round((t.n / max) * 100));
+      return '<div class="catbar-row">' +
+        '<div class="catbar-name">' + escapeHtml(titleCaseCategory(t.category)) + '</div>' +
+        '<div class="catbar-track"><div class="catbar-fill" style="width:' + pct + '%"></div></div>' +
+        '<div class="catbar-count">' + t.n + '</div>' +
+        '</div>';
+    }).join("");
+  }
+
+  function populateCategorySelect(rows) {
+    var counts = {};
+    rows.forEach(function (r) { counts[r.category] = (counts[r.category] || 0) + 1; });
+    var cats = Object.keys(counts).sort(function (a, b) { return counts[b] - counts[a]; });
+    var sel = document.getElementById("f-category");
+    cats.forEach(function (c) {
+      var opt = document.createElement("option");
+      opt.value = c;
+      opt.textContent = titleCaseCategory(c) + " (" + counts[c] + ")";
+      if (c === state.category) opt.selected = true;
+      sel.appendChild(opt);
+    });
+  }
+
+  function applyFilters() {
+    var q = state.search.trim().toLowerCase();
+    var filtered = state.all.filter(function (r) {
+      if (state.category && r.category !== state.category) return false;
+      if (state.minProfit && r.profit < state.minProfit) return false;
+      if (q && r.searchText.indexOf(q) === -1) return false;
+      return true;
+    });
+
+    var sortKey = { score: "score", profit: "profit", discount: "pct", price: "price" }[state.sort];
+    var asc = state.sort === "price";
+    filtered.sort(function (a, b) { return asc ? a[sortKey] - b[sortKey] : b[sortKey] - a[sortKey]; });
+
+    state.filtered = filtered;
+    state.shown = PAGE_SIZE;
+    renderTable();
+  }
+
+  function renderTable() {
+    var tbody = document.getElementById("rows");
+    var visible = state.filtered.slice(0, state.shown);
+
+    if (!visible.length) {
+      tbody.innerHTML = '<tr><td colspan="8" class="state-msg">No listings match these filters.</td></tr>';
+    } else {
+      tbody.innerHTML = visible.map(function (r) {
+        var tier = scoreTier(r.score);
+        var barPct = Math.max(4, Math.min(100, Math.round(r.pct)));
+        return '<tr>' +
+          '<td><span class="score-pill ' + tier.cls + '"><span class="tier-dot"></span>' + r.score.toFixed(0) + '</span></td>' +
+          '<td><a class="item-title" href="' + escapeHtml(r.url) + '" target="_blank" rel="noopener">' + escapeHtml(r.title) + '</a>' +
+            (r.brand ? '<span class="item-brand">' + escapeHtml(r.brand) + '</span>' : '') + '</td>' +
+          '<td>' + escapeHtml(titleCaseCategory(r.category)) + '</td>' +
+          '<td>' + escapeHtml(r.condition) + (r.size ? ' &middot; ' + escapeHtml(r.size) : '') + '</td>' +
+          '<td class="price-cell num">£' + r.price.toFixed(2) + '<span class="price-arrow">&rarr;</span><span class="avg-price">£' + r.groupAvg.toFixed(2) + '</span></td>' +
+          '<td class="num profit">£' + r.profit.toFixed(2) + '</td>' +
+          '<td class="num">' + r.pct.toFixed(0) + '%<span class="discount-bar"><span style="width:' + barPct + '%"></span></span></td>' +
+          '<td><a class="view-link" href="' + escapeHtml(r.url) + '" target="_blank" rel="noopener">View &#8599;</a></td>' +
+          '</tr>';
+      }).join("");
+    }
+
+    var countNote = document.getElementById("count-note");
+    countNote.textContent = "Showing " + Math.min(state.shown, state.filtered.length).toLocaleString() +
+      " of " + state.filtered.length.toLocaleString() + " matching listings";
+
+    var moreBtn = document.getElementById("more-btn");
+    if (state.filtered.length > state.shown) {
+      moreBtn.hidden = false;
+      moreBtn.disabled = false;
+      moreBtn.textContent = "Show " + Math.min(PAGE_SIZE, state.filtered.length - state.shown) + " more";
+    } else {
+      moreBtn.hidden = true;
+    }
+  }
+
+  function showError(msg) {
+    document.getElementById("rows").innerHTML =
+      '<tr><td colspan="8"><div class="state-msg">' + escapeHtml(msg) +
+      '<br><button class="more-btn" id="retry-btn">Retry</button></div></td></tr>';
+    var retry = document.getElementById("retry-btn");
+    if (retry) retry.addEventListener("click", init);
+  }
+
+  function init() {
+    loadPrefs();
+    document.getElementById("f-sort").value = state.sort;
+    document.getElementById("f-minprofit").value = state.minProfit;
+
+    Papa.parse(RAW_BASE + "resale_opportunities.csv", {
+      download: true,
+      header: true,
+      skipEmptyLines: true,
+      complete: function (results) {
+        var rows = results.data
+          .filter(function (r) { return r.listing_id; })
+          .map(function (r) {
+            return {
+              url: r.url,
+              title: r.title || "(untitled listing)",
+              brand: r.brand || "",
+              category: r.category || "unknown",
+              condition: r.condition || "",
+              size: r.size || "",
+              price: parseFloat(r.current_price) || 0,
+              groupAvg: parseFloat(r.group_avg_price) || 0,
+              profit: parseFloat(r.estimated_profit) || 0,
+              pct: parseFloat(r.pct_below_avg) || 0,
+              score: parseFloat(r.resale_score) || 0,
+              searchText: ((r.title || "") + " " + (r.brand || "")).toLowerCase()
+            };
+          });
+
+        if (!rows.length) {
+          showError("No resale opportunities in the current data. Check back after the next scraper run.");
+          document.getElementById("kpis").innerHTML = "";
+          return;
+        }
+
+        state.all = rows;
+        renderKpis(rows);
+        renderCatBars(rows);
+        populateCategorySelect(rows);
+        applyFilters();
+      },
+      error: function () {
+        showError("Couldn't load live data from the repo. Check your connection and try again.");
+      }
+    });
+  }
+
+  document.getElementById("f-search").addEventListener("input", function (e) {
+    state.search = e.target.value;
+    applyFilters();
+  });
+  document.getElementById("f-category").addEventListener("change", function (e) {
+    state.category = e.target.value;
+    savePrefs();
+    applyFilters();
+  });
+  document.getElementById("f-minprofit").addEventListener("input", function (e) {
+    state.minProfit = parseFloat(e.target.value) || 0;
+    savePrefs();
+    applyFilters();
+  });
+  document.getElementById("f-sort").addEventListener("change", function (e) {
+    state.sort = e.target.value;
+    savePrefs();
+    applyFilters();
+  });
+  document.getElementById("more-btn").addEventListener("click", function () {
+    state.shown += PAGE_SIZE;
+    renderTable();
+  });
+
+  init();
+})();
+</script>
+</body>
+</html>
