@@ -6,11 +6,13 @@ on:
 
 # Only ever run one Vinted Scraper workflow at a time. Without this, an
 # overlapping run (the 6-hourly schedule firing while a manual run is
-# still going, or two manual runs close together) races the other one to
-# push data/listings.csv - whichever finishes its commit-and-push last
-# hits a merge conflict and fails, discarding a whole run's work.
-# cancel-in-progress: false means a second trigger waits in a queue for
-# the current run to finish, rather than being dropped or fighting it.
+# still going, or two manual runs close together) would have two
+# scrapers reconciling the same listings against the database at once,
+# and two merge-and-analyze jobs racing to push group_stats.csv/deals.csv/
+# resale_opportunities.csv - whichever finishes last hits a merge
+# conflict and fails. cancel-in-progress: false means a second trigger
+# waits in a queue for the current run to finish, rather than being
+# dropped or fighting it.
 concurrency:
   group: vinted-scraper
   cancel-in-progress: false
@@ -19,21 +21,11 @@ jobs:
   scrape:
     runs-on: ubuntu-latest
     timeout-minutes: 120
+    env:
+      DATABASE_URL: ${{ secrets.DATABASE_URL }}
     steps:
       - name: Check out repo
         uses: actions/checkout@v4
-        with:
-          # Without this, checkout uses the commit main was on when the
-          # workflow was queued, not the live tip at the moment this job
-          # actually starts. The concurrency guard above can queue a run
-          # for a long time behind a previous one - by the time it starts,
-          # the previous run's own final push may already be on main, and
-          # this job's commit step would otherwise be building on a stale
-          # base and collide with it. `ref: main` forces a fresh resolve
-          # of main's actual current tip at checkout time. (Same fix as
-          # merge-and-analyze's checkout below - this job needs it too,
-          # since it also does a full rewrite-and-push of data/listings.csv.)
-          ref: main
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
@@ -46,28 +38,6 @@ jobs:
         run: python scraper.py
       - name: Split unconfirmed listings into batches
         run: python split_batches.py
-      - name: Keep listings.csv under GitHub's file size limit
-        run: python archive_resolved.py
-      - name: Commit listings after scrape
-        # This push can fail (e.g. listings.csv over GitHub's 100MB limit)
-        # without stopping here: check-batches and merge-and-analyze must
-        # still run even when this one fails, because merge-and-analyze's
-        # own archive_resolved.py step is the only thing that can actually
-        # shrink listings.csv back down (by moving confirmed_sold/deleted
-        # listings out of it). Without continue-on-error, a failed push
-        # here marks this whole job "failed", which skips both of those
-        # downstream jobs (their default `needs:` condition requires this
-        # job to succeed) - so the one thing that could fix the size
-        # problem next time never gets to run, and every future run fails
-        # here too. That's exactly what happened for 9 runs straight.
-        continue-on-error: true
-        run: |
-          git config user.name "vinted-scraper-bot"
-          git config user.email "actions@users.noreply.github.com"
-          git add data/listings.csv data/price_history.csv data/listings_archive.csv
-          git diff --quiet --cached || git commit -m "Scrape update $(date -u +'%Y-%m-%d %H:%M UTC')"
-          git pull --rebase origin main
-          git push origin HEAD:main
       - name: Upload batch files
         # GitHub's own artifact storage backend occasionally returns a
         # one-off 403 finalizing the upload (infra flake, nothing to do
@@ -128,19 +98,18 @@ jobs:
     needs: check-batches
     runs-on: ubuntu-latest
     timeout-minutes: 120
+    env:
+      DATABASE_URL: ${{ secrets.DATABASE_URL }}
     steps:
       - name: Check out repo
         uses: actions/checkout@v4
         with:
           # Without this, checkout uses the commit main was on when the
-          # WHOLE workflow was triggered - not the live tip of main right
-          # now. The scrape job (which runs first, and can take an hour)
-          # commits its own changes to main partway through the run, so
-          # by the time this job starts, that pinned commit is already
-          # stale - it's missing this run's own earlier scrape. This job
-          # rewrites data/listings.csv in full, so working from a stale
-          # base guarantees a merge conflict against what scrape already
-          # pushed. `ref: main` forces a fresh resolve of main's actual
+          # WHOLE workflow was triggered, not the live tip of main right
+          # now - the earlier jobs in this run can take a couple of hours
+          # combined, so if anything else got pushed to main in that
+          # window, this job's own commit below would build on a stale
+          # base. `ref: main` forces a fresh resolve of main's actual
           # current tip at checkout time instead of reusing the stale one.
           ref: main
       - name: Set up Python
@@ -155,19 +124,17 @@ jobs:
           pattern: results-*
           path: data/batches
           merge-multiple: true
-      - name: Merge results into listings.csv
+      - name: Merge results into database
         run: python merge_batches.py
       - name: Run analyzer
         run: python analyze.py
       - name: Find resale opportunities
         run: python resale_score.py
-      - name: Keep listings.csv under GitHub's file size limit
-        run: python archive_resolved.py
       - name: Commit and push final data
         run: |
           git config user.name "vinted-scraper-bot"
           git config user.email "actions@users.noreply.github.com"
-          git add data/listings.csv data/group_stats.csv data/deals.csv data/resale_opportunities.csv data/listings_archive.csv
+          git add data/group_stats.csv data/deals.csv data/resale_opportunities.csv
           git diff --quiet --cached || git commit -m "Sold-check + analytics $(date -u +'%Y-%m-%d %H:%M UTC')"
           git pull --rebase origin main
           git push origin HEAD:main

@@ -1,0 +1,31 @@
+name: Migrate to database
+
+# Manual, one-time only - run this exactly once, from the Actions tab,
+# after setting the DATABASE_URL repository secret (Settings -> Secrets
+# and variables -> Actions -> New repository secret, using your
+# Supabase connection string). It moves everything currently in
+# data/listings.csv, data/listings_archive.csv, and data/price_history.csv
+# into the database (creating the tables first if needed) so the
+# scheduled scraper workflow has real history to build on instead of
+# starting empty. Safe to re-run if it fails partway through - it
+# upserts by listing_id, so nothing gets duplicated.
+on:
+  workflow_dispatch: {}
+
+jobs:
+  migrate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      DATABASE_URL: ${{ secrets.DATABASE_URL }}
+    steps:
+      - name: Check out repo
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install dependencies
+        run: pip install psycopg2-binary==2.9.12
+      - name: Run migration
+        run: python migrate_to_db.py

@@ -1,14 +1,16 @@
 """
 analyze.py
 
-Reads data/listings.csv and produces market analytics:
+Reads every listing from the database (see listings_db.py) and produces
+market analytics:
 
   - Average/median price per (brand, category, condition, size) group
   - Typical "days listed" per group, as a demand proxy
   - A flagged list of currently ACTIVE listings priced meaningfully below
     their group's average - i.e. "deals"
 
-Outputs two files into data/:
+Outputs two files into data/ (small, derived, and still committed to git
+- only the raw listing/price-history data moved to the database):
 
   data/group_stats.csv   - one row per (brand, category, condition, size)
                             group: avg price, median price, sample size,
@@ -20,9 +22,9 @@ Groups with fewer than MIN_SAMPLE_SIZE listings are excluded from
 group_stats.csv and never used to flag deals - too few comparable
 listings makes the average unreliable/noisy rather than meaningful.
 
-Run manually:  python analyze.py
-(Not scheduled by GitHub Actions - run this locally or add a separate
- workflow step/job later once you're ready to automate it too.)
+Run manually:  DATABASE_URL=postgresql://... python analyze.py
+Runs automatically as part of the "merge-and-analyze" job in
+.github/workflows/scrape.yml.
 """
 
 import csv
@@ -30,9 +32,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 from statistics import mean, median
 
+import listings_db
+
 ROOT = Path(__file__).parent
 DATA_DIR = ROOT / "data"
-LISTINGS_PATH = DATA_DIR / "listings.csv"
 GROUP_STATS_PATH = DATA_DIR / "group_stats.csv"
 DEALS_PATH = DATA_DIR / "deals.csv"
 
@@ -133,9 +136,7 @@ def passes_price_floor(category, price):
 
 
 def load_listings():
-    with open(LISTINGS_PATH, "r", newline="", encoding="utf-8") as f:
-        reader = csv.DictReader(f)
-        return list(reader)
+    return listings_db.fetch_all_rows()
 
 
 def build_groups(listings):
@@ -288,10 +289,6 @@ def write_csv(path, columns, rows):
 
 
 def analyze():
-    if not LISTINGS_PATH.exists():
-        print(f"No listings.csv found at {LISTINGS_PATH}")
-        return
-
     listings = load_listings()
     now = datetime.now(timezone.utc)
 

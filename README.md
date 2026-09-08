@@ -29,9 +29,40 @@ needed — GitHub Actions triggers it every 6 hours.
    under "Workflow permissions" select **"Read and write permissions"**.
    This lets the workflow commit the scraped CSV back to the repo — without
    this step, the scrape will run but the commit-and-push step will fail.
-3. Go to the **Actions** tab → you should see "Vinted Scraper" listed.
+3. Set up the database (see below) - the scraper's actual listing data
+   lives in Postgres now, not in a CSV in this repo.
+4. Go to the **Actions** tab → you should see "Vinted Scraper" listed.
    Click into it → **Run workflow** to trigger it manually and confirm it
    works, rather than waiting up to 6 hours for the first scheduled run.
+
+## Database setup (one-time)
+
+The full listing history (every listing ever seen, and its price
+history) is stored in a Postgres database instead of a CSV file in this
+repo - CSVs committed to git don't scale forever, and GitHub hard-rejects
+any pushed file over 100MB. [Supabase](https://supabase.com) gives you a
+free Postgres database with no server to manage.
+
+1. Create a free account at [supabase.com](https://supabase.com) and a
+   new project.
+2. In the project, go to **Project Settings → Database → Connection
+   string**, and copy the **URI** (starts with `postgresql://...`).
+3. In this GitHub repo, go to **Settings → Secrets and variables →
+   Actions → New repository secret**. Name it `DATABASE_URL`, paste the
+   connection string as the value, and save.
+4. Go to the **Actions** tab → **Migrate to database** → **Run workflow**.
+   Run this exactly once - it moves everything currently in
+   `data/listings.csv`, `data/listings_archive.csv`, and
+   `data/price_history.csv` into the database, creating the tables for
+   you. It's safe to re-run if it fails partway through.
+
+After that, every scraper run reads and writes the database directly -
+`data/listings.csv` and friends are no longer touched by any script, and
+can be deleted from the repo once you've confirmed everything looks
+right (they're kept as a historical snapshot in the meantime). The
+dashboard and `data/group_stats.csv`/`data/deals.csv`/
+`data/resale_opportunities.csv` are unaffected - those stay small and
+keep living in git as before.
 
 ## Running it locally (optional, for testing)
 

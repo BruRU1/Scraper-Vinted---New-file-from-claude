@@ -12,18 +12,19 @@ guarantees steady forward progress through the whole backlog every run,
 regardless of how much or little was newly flagged, and nothing can
 silently fall out of scope waiting for a narrower time window.
 
-Run manually:  python split_batches.py
+Run manually:  DATABASE_URL=postgresql://... python split_batches.py
 (In the automated workflow, this runs right after scraper.py, against
-whatever scraper.py just committed to data/listings.csv.)
+whatever scraper.py just wrote to the database.)
 """
 
 import csv
 import math
 from pathlib import Path
 
+import listings_db
+
 ROOT = Path(__file__).parent
 DATA_DIR = ROOT / "data"
-LISTINGS_PATH = DATA_DIR / "listings.csv"
 BATCHES_DIR = DATA_DIR / "batches"
 
 NUM_BATCHES = 18
@@ -33,29 +34,27 @@ NUM_BATCHES = 18
 # check_batch.py can comfortably handle within the job timeout.
 #
 # Raised from 18000: the unconfirmed backlog has been growing faster than
-# 18000/run could resolve (and therefore archive out of listings.csv),
-# which is what let the file creep back up toward GitHub's 100MB push
-# limit. Batches of 1000 (18000/18) were taking ~20-25 min against a
-# 120-min job timeout, so there was clear headroom - 30000/18 ~= 1667 per
-# batch, still comfortably under check_batch.py's own MAX_PER_BATCH=3000
-# safety cap.
+# 18000/run could resolve, which is what let listings.csv creep back up
+# toward GitHub's 100MB push limit (now moot - see listings_db.py - but
+# the processing-capacity reasoning still holds). Batches of 1000
+# (18000/18) were taking ~20-25 min against a 120-min job timeout, so
+# there was clear headroom - 30000/18 ~= 1667 per batch, still
+# comfortably under check_batch.py's own MAX_PER_BATCH=3000 safety cap.
 TOTAL_CAP_PER_RUN = 30000
 
 BATCH_COLUMNS = ["listing_id", "url"]
 
 
 def main():
-    with open(LISTINGS_PATH, "r", newline="", encoding="utf-8") as f:
-        listings = list(csv.DictReader(f))
+    # (listing_id, url) tuples, oldest-flagged first - the database does
+    # the filtering and sorting now instead of loading everything into
+    # Python (blank date_disappeared still sorts last, not first, so it
+    # doesn't jump the queue ahead of dated ones).
+    unconfirmed = listings_db.fetch_unconfirmed(order_by_oldest=True)
+    total_listings = listings_db.count_all_listings()
 
-    unconfirmed = [row for row in listings if row.get("status") == "likely_sold_or_removed"]
-
-    print(f"Loaded {len(listings)} total listings.")
+    print(f"{total_listings} total listings in the database.")
     print(f"Found {len(unconfirmed)} listings still marked likely_sold_or_removed.")
-
-    # Oldest-flagged first (blank date_disappeared sorts last, not first,
-    # so it doesn't jump the queue ahead of dated ones).
-    unconfirmed.sort(key=lambda r: r.get("date_disappeared") or "9999")
 
     to_check = unconfirmed[:TOTAL_CAP_PER_RUN]
     print(f"Processing {len(to_check)} this run (oldest-flagged first, "
@@ -84,8 +83,8 @@ def main():
         with open(BATCHES_DIR / f"batch_{i}.csv", "w", newline="", encoding="utf-8") as f:
             writer = csv.DictWriter(f, fieldnames=BATCH_COLUMNS)
             writer.writeheader()
-            for row in batch_rows:
-                writer.writerow({"listing_id": row["listing_id"], "url": row["url"]})
+            for listing_id, url in batch_rows:
+                writer.writerow({"listing_id": listing_id, "url": url})
 
         print(f"  batch_{i}.csv: {len(batch_rows)} listings")
 
