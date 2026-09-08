@@ -33,10 +33,11 @@ Caveats worth knowing about (kept intentionally simple for v1):
     history that group has - a thin history makes it a rougher estimate.
 
 Must run after analyze.py, since it reuses analyze.py's grouping logic
-against the same data/listings.csv analyze.py just read. Output:
-data/resale_opportunities.csv, sorted by resale_score descending.
+against the same database rows analyze.py just read. Output:
+data/resale_opportunities.csv (small and derived, still committed to
+git), sorted by resale_score descending.
 
-Run manually:  python resale_score.py
+Run manually:  DATABASE_URL=postgresql://... python resale_score.py
 """
 
 from datetime import datetime, timezone
@@ -200,10 +201,6 @@ def compute_resale_opportunities(listings, group_stats, group_avg_lookup):
 
 
 def main():
-    if not DATA_DIR.exists():
-        print(f"No {DATA_DIR} found - nothing to do.")
-        return
-
     listings = load_listings()
     now = datetime.now(timezone.utc)
 
