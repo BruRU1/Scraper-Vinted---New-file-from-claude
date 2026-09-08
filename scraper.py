@@ -6,23 +6,22 @@ the original Chrome extension (selectors.js + content.js), ported into
 extract.js and run in-page via Playwright's page.evaluate().
 
 Reads its target list from categories.json, visits N pages per category,
-and reconciles results into two persistent files:
+and reconciles results into two Postgres tables (see listings_db.py):
 
-  data/listings.csv       - one row per unique listing (current state),
-                             keyed by a stable internal listing_id. Includes
-                             at-a-glance price-drop summary columns
-                             (original_price, price_drops, last_price_change)
-                             so you can see the drop picture without opening
-                             the second file.
+  listings        - one row per unique listing (current state), keyed by
+                     a stable internal listing_id. Includes at-a-glance
+                     price-drop summary columns (original_price,
+                     price_drops, last_price_change) so you can see the
+                     drop picture without joining against price_history.
 
-  data/price_history.csv  - the detailed log: one row per price change ever
-                             recorded, for deeper analysis later (timing of
-                             drops, sell-through modelling, etc).
+  price_history    - the detailed log: one row per price change ever
+                     recorded, for deeper analysis later (timing of
+                     drops, sell-through modelling, etc).
 
 Listings are matched across runs by URL. New URLs get the next sequential
 listing_id. Existing listings have their current data refreshed; if the
-price changed, listings.csv's summary columns are updated AND a row is
-appended to price_history.csv.
+price changed, listings' summary columns are updated AND a row is
+appended to price_history.
 
 A listing that isn't seen for MISSING_RUNS_THRESHOLD consecutive runs
 (currently 3, i.e. ~18 hours at the 6-hourly schedule) is marked
@@ -37,62 +36,29 @@ merge_batches.py) to confirm what really happened - sold, still active
 overly-eager flag here isn't permanent: it gets corrected automatically
 the next time the batch checker reaches it.
 
-Run manually:      python scraper.py
+Run manually:      DATABASE_URL=postgresql://... python scraper.py
 Run automatically:  triggered on a schedule by .github/workflows/scrape.yml
 """
 
-import json
-import csv
 import random
 import time
+import json
 from datetime import datetime, timezone
 from pathlib import Path
 
 from playwright.sync_api import sync_playwright
 
+import listings_db
+
 ROOT = Path(__file__).parent
 CONFIG_PATH = ROOT / "categories.json"
 EXTRACT_JS_PATH = ROOT / "extract.js"
-DATA_DIR = ROOT / "data"
-LISTINGS_PATH = DATA_DIR / "listings.csv"
-HISTORY_PATH = DATA_DIR / "price_history.csv"
 
 # Number of consecutive runs a previously-active listing must be absent
 # from before we flag it as likely sold/removed. Keeps a single missed
 # appearance (e.g. pagination shuffled by new listings) from being a
 # false positive.
 MISSING_RUNS_THRESHOLD = 3
-
-LISTINGS_COLUMNS = [
-    "listing_id",
-    "url",
-    "platform",
-    "category",
-    "title",
-    "current_price",
-    "original_price",       # price the listing was first scraped at
-    "price_drops",           # count of recorded price changes
-    "last_price_change",     # timestamp of most recent change, else ""
-    "currency",
-    "brand",
-    "size",
-    "condition",
-    "imageUrl",
-    "first_seen",
-    "last_seen",
-    "status",              # "active" | "likely_sold_or_removed" | "confirmed_sold" | "deleted"
-    "date_disappeared",    # set when status flips away from active; cleared if reactivated
-    "consecutive_misses",
-    "sold_price",           # set only when status becomes confirmed_sold
-    "sold_confirmed_at",    # timestamp the sold check confirmed it
-]
-
-HISTORY_COLUMNS = [
-    "listing_id",
-    "old_price",
-    "new_price",
-    "changed_at",
-]
 
 USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
@@ -115,49 +81,6 @@ def build_url(base_url, path, page_number):
         return f"{base_url}{path}"
     separator = "&" if "?" in path else "?"
     return f"{base_url}{path}{separator}page={page_number}"
-
-
-def ensure_data_files():
-    DATA_DIR.mkdir(exist_ok=True)
-    if not LISTINGS_PATH.exists():
-        with open(LISTINGS_PATH, "w", newline="", encoding="utf-8") as f:
-            csv.DictWriter(f, fieldnames=LISTINGS_COLUMNS).writeheader()
-    if not HISTORY_PATH.exists():
-        with open(HISTORY_PATH, "w", newline="", encoding="utf-8") as f:
-            csv.DictWriter(f, fieldnames=HISTORY_COLUMNS).writeheader()
-
-
-def load_listings():
-    """Returns (listings_by_url dict, next_id int)."""
-    listings_by_url = {}
-    max_id = 0
-    with open(LISTINGS_PATH, "r", newline="", encoding="utf-8") as f:
-        reader = csv.DictReader(f)
-        for row in reader:
-            row["listing_id"] = int(row["listing_id"])
-            row["consecutive_misses"] = int(row["consecutive_misses"] or 0)
-            row["price_drops"] = int(row["price_drops"] or 0)
-            listings_by_url[row["url"]] = row
-            max_id = max(max_id, row["listing_id"])
-    return listings_by_url, max_id + 1
-
-
-def save_listings(listings_by_url):
-    rows = sorted(listings_by_url.values(), key=lambda r: r["listing_id"])
-    with open(LISTINGS_PATH, "w", newline="", encoding="utf-8") as f:
-        writer = csv.DictWriter(f, fieldnames=LISTINGS_COLUMNS)
-        writer.writeheader()
-        for row in rows:
-            writer.writerow(row)
-
-
-def append_history(rows):
-    if not rows:
-        return
-    with open(HISTORY_PATH, "a", newline="", encoding="utf-8") as f:
-        writer = csv.DictWriter(f, fieldnames=HISTORY_COLUMNS)
-        for row in rows:
-            writer.writerow(row)
 
 
 def parse_price(value):
@@ -253,7 +176,7 @@ def mark_missing_listings(listings_by_url, seen_urls_this_run, now_iso):
     miss counter bumped; past the threshold it's flagged as likely gone.
     Returns the list of (listing_id, url) pairs newly flagged THIS run,
     for logging - split_batches.py doesn't rely on this list, it pulls
-    the full likely_sold_or_removed queue straight from listings.csv."""
+    the full likely_sold_or_removed queue straight from the database."""
     newly_flagged = []
     for url, row in listings_by_url.items():
         if url in seen_urls_this_run:
@@ -265,6 +188,12 @@ def mark_missing_listings(listings_by_url, seen_urls_this_run, now_iso):
         if row["consecutive_misses"] >= MISSING_RUNS_THRESHOLD:
             row["status"] = "likely_sold_or_removed"
             row["date_disappeared"] = now_iso
+            # A thumbnail link for a listing that's not confirmed to
+            # still exist isn't useful, and it's one of the largest
+            # columns in the table - clearing it here (rather than in a
+            # separate archiving pass) keeps storage down as listings
+            # drop off active status, not just once they're fully resolved.
+            row["imageUrl"] = ""
             newly_flagged.append((row["listing_id"], url))
 
     return newly_flagged
@@ -277,8 +206,7 @@ def scrape():
     pages_per_category = config.get("pages_per_category", 10)
     categories = config["categories"]
 
-    ensure_data_files()
-    listings_by_url, next_id = load_listings()
+    listings_by_url, next_id = listings_db.load_all_listings()
 
     seen_urls_this_run = set()
     history_rows = []
@@ -343,8 +271,8 @@ def scrape():
     run_time = datetime.now(timezone.utc).isoformat()
     newly_flagged = mark_missing_listings(listings_by_url, seen_urls_this_run, run_time)
 
-    save_listings(listings_by_url)
-    append_history(history_rows)
+    listings_db.save_all_listings(listings_by_url)
+    listings_db.append_history(history_rows)
 
     print(
         f"\nDone. {total_new} new listings, {total_updated} existing listings "
