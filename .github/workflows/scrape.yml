@@ -49,6 +49,18 @@ jobs:
       - name: Keep listings.csv under GitHub's file size limit
         run: python archive_resolved.py
       - name: Commit listings after scrape
+        # This push can fail (e.g. listings.csv over GitHub's 100MB limit)
+        # without stopping here: check-batches and merge-and-analyze must
+        # still run even when this one fails, because merge-and-analyze's
+        # own archive_resolved.py step is the only thing that can actually
+        # shrink listings.csv back down (by moving confirmed_sold/deleted
+        # listings out of it). Without continue-on-error, a failed push
+        # here marks this whole job "failed", which skips both of those
+        # downstream jobs (their default `needs:` condition requires this
+        # job to succeed) - so the one thing that could fix the size
+        # problem next time never gets to run, and every future run fails
+        # here too. That's exactly what happened for 9 runs straight.
+        continue-on-error: true
         run: |
           git config user.name "vinted-scraper-bot"
           git config user.email "actions@users.noreply.github.com"
