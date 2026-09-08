@@ -168,6 +168,19 @@ def main():
     batch_path = BATCHES_DIR / f"batch_{batch_num}.csv"
     results_path = BATCHES_DIR / f"results_{batch_num}.csv"
 
+    if not batch_path.exists():
+        # Happens if the scrape job's artifact upload failed (a GitHub
+        # infra hiccup, not a data problem) - nothing to check this run,
+        # split_batches.py will pick these listings up again next run.
+        # BATCHES_DIR itself may not exist either in this case (only the
+        # download-artifact step normally creates it), so make sure it's
+        # there before writing an empty results file into it.
+        print(f"Batch {batch_num}: {batch_path} not found (upload likely "
+              f"failed upstream) - nothing to check this run.")
+        BATCHES_DIR.mkdir(parents=True, exist_ok=True)
+        write_results(results_path)
+        return
+
     with open(batch_path, "r", newline="", encoding="utf-8") as f:
         batch = list(csv.DictReader(f))
 

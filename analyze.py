@@ -109,6 +109,19 @@ def normalize(value):
     return value if value else "unknown"
 
 
+def canonical_size(value):
+    """Vinted shows the same physical size as plain 'M' on some category
+    pages and 'M / UK 12-14' on others, depending on which page a listing
+    was found through. Left as-is, those would form two separate groups
+    for the exact same size, needlessly halving the comparable listings
+    for both. Taking just the part before ' / ' merges them; numeric-only
+    sizes (waist 'W34', shoe '9') have no ' / ' and pass through untouched."""
+    value = (value or "").strip()
+    if " / " in value:
+        return value.split(" / ")[0].strip()
+    return value
+
+
 def passes_price_floor(category, price):
     """False for a "brand_*" (keyword-search) category priced below the
     floor - almost certainly not a genuine item of that brand, just
@@ -133,7 +146,7 @@ def build_groups(listings):
             normalize(row.get("brand")),
             normalize(row.get("category")),
             normalize(row.get("condition")),
-            normalize(row.get("size")),
+            normalize(canonical_size(row.get("size"))),
         )
         groups.setdefault(key, []).append(row)
     return groups
@@ -226,7 +239,7 @@ def find_deals(listings, group_avg_lookup, now):
             normalize(row.get("brand")),
             normalize(row.get("category")),
             normalize(row.get("condition")),
-            normalize(row.get("size")),
+            normalize(canonical_size(row.get("size"))),
         )
         group_avg = group_avg_lookup.get(key)
         if group_avg is None:
