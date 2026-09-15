@@ -129,10 +129,13 @@ jobs:
           merge-multiple: true
       - name: Merge results into database
         run: python merge_batches.py
-      - name: Run analyzer
-        run: python analyze.py
-      - name: Find resale opportunities
-        run: python resale_score.py
+      - name: Run analytics
+        # Runs analyze.py and resale_score.py against a single shared
+        # fetch of the listings table (see run_analytics.py) instead of
+        # each independently re-fetching the whole thing - cuts a full
+        # extra pass over the (large, growing) table's worth of Supabase
+        # egress every run.
+        run: python run_analytics.py
       - name: Commit and push final data
         run: |
           git config user.name "vinted-scraper-bot"
