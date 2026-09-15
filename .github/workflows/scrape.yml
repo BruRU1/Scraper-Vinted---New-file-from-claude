@@ -1,7 +1,10 @@
 name: Vinted Scraper
 on:
-  schedule:
-    - cron: "0 */6 * * *"
+  # Scheduled runs paused - uncomment the two lines below to resume the
+  # every-6-hours automatic schedule. workflow_dispatch stays available
+  # in the meantime, so it can still be run manually from the Actions tab.
+  # schedule:
+  #   - cron: "0 */6 * * *"
   workflow_dispatch: {}
 
 # Only ever run one Vinted Scraper workflow at a time. Without this, an
