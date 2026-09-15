@@ -98,18 +98,10 @@ def to_sql(value):
     return value
 
 
-def fetch_all_rows():
-    """Every listing as a plain list of dicts, same shape as the old
-    csv.DictReader(listings.csv) rows."""
-    db_cols = [db_column(c) for c in LISTINGS_COLUMNS]
-    with get_connection() as conn:
-        with conn.cursor() as cur:
-            cur.execute(f"SELECT {', '.join(db_cols)} FROM listings")
-            rows = cur.fetchall()
-
+def _rows_to_dicts(db_rows, columns):
     result = []
-    for db_row in rows:
-        row = {col: _stringify(val) for col, val in zip(LISTINGS_COLUMNS, db_row)}
+    for db_row in db_rows:
+        row = {col: _stringify(val) for col, val in zip(columns, db_row)}
         row["listing_id"] = int(row["listing_id"])
         row["consecutive_misses"] = int(row["consecutive_misses"] or 0)
         row["price_drops"] = int(row["price_drops"] or 0)
@@ -117,15 +109,69 @@ def fetch_all_rows():
     return result
 
 
-def load_all_listings():
-    """Returns (listings_by_url dict, next_id int) - exactly what
-    scraper.py's old CSV-backed load_listings() returned."""
-    listings_by_url = {}
-    max_id = 0
-    for row in fetch_all_rows():
-        listings_by_url[row["url"]] = row
-        max_id = max(max_id, row["listing_id"])
-    return listings_by_url, max_id + 1
+def fetch_all_rows(exclude_columns=None):
+    """Every listing as a plain list of dicts, same shape as the old
+    csv.DictReader(listings.csv) rows. Pass exclude_columns to skip ones
+    the caller never uses (e.g. "imageUrl") - every column fetched is
+    Supabase egress, and a table this size adds up fast."""
+    exclude = set(exclude_columns or [])
+    columns = [c for c in LISTINGS_COLUMNS if c not in exclude]
+    db_cols = [db_column(c) for c in columns]
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(f"SELECT {', '.join(db_cols)} FROM listings")
+            rows = cur.fetchall()
+    return _rows_to_dicts(rows, columns)
+
+
+def fetch_url_id_map():
+    """Lightweight {url: listing_id} for every row, regardless of status -
+    just two columns, versus all 20 fetch_all_rows() pulls. Enough to
+    recognize "this URL has been seen before" (and reuse its listing_id)
+    without paying for the full row of every listing scraper.py has no
+    reason to touch."""
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT url, listing_id FROM listings")
+            return {url: int(listing_id) for url, listing_id in cur.fetchall()}
+
+
+def fetch_rows_by_status(statuses):
+    """Full row dicts, same shape as fetch_all_rows(), but only for the
+    given statuses."""
+    db_cols = [db_column(c) for c in LISTINGS_COLUMNS]
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                f"SELECT {', '.join(db_cols)} FROM listings WHERE status = ANY(%s)",
+                (list(statuses),),
+            )
+            rows = cur.fetchall()
+    return _rows_to_dicts(rows, LISTINGS_COLUMNS)
+
+
+def load_for_scrape():
+    """Returns (listings_by_url, url_to_id, next_id) for scraper.py.
+
+    scraper.py only ever reconciles/reactivates listings that are
+    currently "active" or "likely_sold_or_removed" - a confirmed_sold or
+    deleted row is never modified by it, so there's no reason to pull its
+    full ~20-column data (and pay the egress for it) on every single run,
+    which is what load_all_listings() used to do for the ENTIRE table.
+
+    url_to_id still covers every URL regardless of status (just 2 columns,
+    all rows) purely so a listing that gets relisted on Vinted after
+    already being confirmed_sold/deleted reuses its old listing_id instead
+    of minting a duplicate one - that gap (scraper.py not recognizing an
+    archived listing's URL) is exactly the bug migrate_to_db.py had to
+    clean up after the fact; this keeps it from recurring, at a fraction
+    of the cost of loading those rows' full data every run.
+    """
+    url_to_id = fetch_url_id_map()
+    rows = fetch_rows_by_status(["active", "likely_sold_or_removed"])
+    listings_by_url = {row["url"]: row for row in rows}
+    next_id = (max(url_to_id.values()) if url_to_id else 0) + 1
+    return listings_by_url, url_to_id, next_id
 
 
 def save_all_listings(listings_by_url):
