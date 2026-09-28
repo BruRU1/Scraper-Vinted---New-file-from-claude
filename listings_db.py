@@ -218,6 +218,75 @@ def append_history(rows):
         conn.commit()
 
 
+HISTORY_COLUMNS = ["listing_id", "old_price", "new_price", "changed_at"]
+
+
+def fetch_history_for_listings(listing_ids):
+    """price_history rows for the given listing_ids - used by
+    archive_resolved.py to pull a resolved listing's price history along
+    with it before removing both from the live database."""
+    if not listing_ids:
+        return []
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT listing_id, old_price, new_price, changed_at "
+                "FROM price_history WHERE listing_id = ANY(%s)",
+                (list(listing_ids),),
+            )
+            rows = cur.fetchall()
+    return [{col: _stringify(val) for col, val in zip(HISTORY_COLUMNS, row)} for row in rows]
+
+
+def delete_resolved(listing_ids):
+    """Removes the given listing_ids from both price_history and
+    listings (price_history first - it has a foreign key onto listings,
+    so the reverse order would fail). Only ever called by
+    archive_resolved.py, and only after those rows have already been
+    written to the archive file - once a row is gone from here, the
+    archive file is the only remaining copy. Returns the number of
+    listings rows removed."""
+    if not listing_ids:
+        return 0
+    ids = list(listing_ids)
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute("DELETE FROM price_history WHERE listing_id = ANY(%s)", (ids,))
+            cur.execute("DELETE FROM listings WHERE listing_id = ANY(%s)", (ids,))
+            deleted = cur.rowcount
+        conn.commit()
+    return deleted
+
+
+def vacuum_full(tables):
+    """Physically reclaims disk space after deleting rows. A plain DELETE
+    only marks rows as removable - Postgres doesn't shrink the file on
+    disk (or reduce what Supabase counts against the storage quota)
+    until something rewrites the table, which VACUUM FULL does. VACUUM
+    can't run inside a transaction, so this uses its own autocommit
+    connection rather than get_connection()'s usual "with" block."""
+    conn = get_connection()
+    conn.autocommit = True
+    try:
+        with conn.cursor() as cur:
+            for table in tables:
+                cur.execute(f"VACUUM FULL {table}")
+    finally:
+        conn.close()
+
+
+def drop_unused_price_history_index():
+    """idx_price_history_listing_id was created expecting price_history
+    to eventually be queried by listing_id, but nothing in this codebase
+    ever does that lookup - it's pure dead weight (schema.sql no longer
+    creates it on a fresh install). Safe to call every run: DROP INDEX
+    IF EXISTS is a no-op once it's already gone."""
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute("DROP INDEX IF EXISTS idx_price_history_listing_id")
+        conn.commit()
+
+
 def fetch_unconfirmed(order_by_oldest=True):
     """(listing_id, url) pairs still marked likely_sold_or_removed, for
     split_batches.py. Sorting happens in Postgres instead of Python -

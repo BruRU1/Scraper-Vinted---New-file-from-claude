@@ -136,11 +136,18 @@ jobs:
         # extra pass over the (large, growing) table's worth of Supabase
         # egress every run.
         run: python run_analytics.py
+      - name: Archive resolved listings
+        # Moves confirmed_sold/deleted listings (nothing left to ever
+        # check again) out of the live database into a compressed
+        # archive file in the repo - keeps the database well under
+        # Supabase's free-tier storage limit permanently, instead of
+        # this being a one-off cleanup that just fills back up.
+        run: python archive_resolved.py
       - name: Commit and push final data
         run: |
           git config user.name "vinted-scraper-bot"
           git config user.email "actions@users.noreply.github.com"
-          git add data/group_stats.csv data/deals.csv data/resale_opportunities.csv
+          git add data/group_stats.csv data/deals.csv data/resale_opportunities.csv data/listings_resolved_archive.csv.gz data/price_history_archive.csv.gz
           git diff --quiet --cached || git commit -m "Sold-check + analytics $(date -u +'%Y-%m-%d %H:%M UTC')"
           git pull --rebase origin main
           git push origin HEAD:main
