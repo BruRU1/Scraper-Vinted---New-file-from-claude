@@ -1,0 +1,26 @@
+name: DB size report
+
+# Manual, read-only diagnostic - run from the Actions tab whenever you
+# want to see how much space each table/index in the database is using,
+# and how the listings table breaks down by status. Doesn't change
+# anything.
+on:
+  workflow_dispatch: {}
+
+jobs:
+  report:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      DATABASE_URL: ${{ secrets.DATABASE_URL }}
+    steps:
+      - name: Check out repo
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install dependencies
+        run: pip install psycopg2-binary==2.9.12
+      - name: Run size report
+        run: python db_size_report.py
