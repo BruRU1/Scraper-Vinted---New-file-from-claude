@@ -46,4 +46,10 @@ CREATE TABLE IF NOT EXISTS price_history (
     changed_at  TIMESTAMPTZ
 );
 
-CREATE INDEX IF NOT EXISTS idx_price_history_listing_id ON price_history (listing_id);
+-- No index on price_history.listing_id - nothing in this codebase ever
+-- looks price history up that way (it's write-only from the scraper's
+-- side; archive_resolved.py is the only reader, and it filters by a
+-- batch of IDs via = ANY(), which doesn't benefit from a btree here at
+-- this table's size). archive_resolved.py drops this index automatically
+-- if it finds one from before this was noticed - see
+-- listings_db.drop_unused_price_history_index().

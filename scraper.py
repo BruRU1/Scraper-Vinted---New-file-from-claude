@@ -36,6 +36,17 @@ merge_batches.py) to confirm what really happened - sold, still active
 overly-eager flag here isn't permanent: it gets corrected automatically
 the next time the batch checker reaches it.
 
+Only pulls the full row data for "active"/"likely_sold_or_removed"
+listings from the database (listings_db.load_for_scrape()) - those are
+the only ones this script ever reconciles or reactivates. Every other
+URL is still recognized (via a lightweight url -> listing_id lookup) so
+a relisted item never gets a duplicate ID, but its full ~20-column data
+isn't pulled across the network for nothing. Every byte fetched from
+Supabase counts against its egress quota, and pulling the entire
+(large, ever-growing) table on every run - most of which this script
+never even touches - is what pushed this project over its free-tier
+limit.
+
 Run manually:      DATABASE_URL=postgresql://... python scraper.py
 Run automatically:  triggered on a schedule by .github/workflows/scrape.yml
 """
@@ -92,7 +103,7 @@ def parse_price(value):
         return None
 
 
-def reconcile(listings_by_url, next_id, scraped_listing, category_name, now_iso):
+def reconcile(listings_by_url, url_to_id, next_id, scraped_listing, category_name, now_iso):
     """
     Update listings_by_url in place for a single freshly-scraped item.
     Returns (next_id, history_row_or_None, url).
@@ -106,9 +117,16 @@ def reconcile(listings_by_url, next_id, scraped_listing, category_name, now_iso)
     history_row = None
 
     if existing is None:
-        # Brand new listing.
-        listing_id = next_id
-        next_id += 1
+        # Brand new listing - UNLESS this URL belongs to a listing that's
+        # already confirmed_sold/deleted (not loaded into listings_by_url,
+        # since scraper.py never needs to touch those - see
+        # listings_db.load_for_scrape()) and has resurfaced on Vinted.
+        # Reuse its listing_id rather than minting a new one, which is
+        # exactly the duplicate-ID bug migrate_to_db.py had to clean up.
+        recycled_id = url_to_id.get(url)
+        listing_id = recycled_id if recycled_id is not None else next_id
+        if recycled_id is None:
+            next_id += 1
         listings_by_url[url] = {
             "listing_id": listing_id,
             "url": url,
@@ -206,7 +224,7 @@ def scrape():
     pages_per_category = config.get("pages_per_category", 10)
     categories = config["categories"]
 
-    listings_by_url, next_id = listings_db.load_all_listings()
+    listings_by_url, url_to_id, next_id = listings_db.load_for_scrape()
 
     seen_urls_this_run = set()
     history_rows = []
@@ -246,7 +264,7 @@ def scrape():
                     for listing in listings:
                         was_new = listing.get("url", "") not in listings_by_url
                         next_id, history_row, seen_url = reconcile(
-                            listings_by_url, next_id, listing, name, now
+                            listings_by_url, url_to_id, next_id, listing, name, now
                         )
                         if seen_url:
                             seen_urls_this_run.add(seen_url)

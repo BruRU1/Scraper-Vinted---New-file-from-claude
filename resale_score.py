@@ -200,12 +200,18 @@ def compute_resale_opportunities(listings, group_stats, group_avg_lookup):
     return opportunities
 
 
-def main():
-    listings = load_listings()
-    now = datetime.now(timezone.utc)
+def main(listings=None, group_stats=None, group_avg_lookup=None):
+    """Pass pre-fetched/pre-computed `listings`/`group_stats`/
+    `group_avg_lookup` (e.g. from analyze.analyze()'s return value, via
+    run_analytics.py) to reuse analyze.py's already-fetched data instead
+    of independently re-fetching the whole table and recomputing the
+    same groups from scratch."""
+    if listings is None:
+        listings = load_listings()
+    if group_stats is None or group_avg_lookup is None:
+        groups = build_groups(listings)
+        group_stats, group_avg_lookup = compute_group_stats(groups, datetime.now(timezone.utc))
 
-    groups = build_groups(listings)
-    group_stats, group_avg_lookup = compute_group_stats(groups, now)
     opportunities = compute_resale_opportunities(listings, group_stats, group_avg_lookup)
 
     write_csv(RESALE_PATH, RESALE_COLUMNS, opportunities)

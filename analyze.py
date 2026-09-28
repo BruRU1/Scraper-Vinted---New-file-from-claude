@@ -136,7 +136,10 @@ def passes_price_floor(category, price):
 
 
 def load_listings():
-    return listings_db.fetch_all_rows()
+    # imageUrl isn't used anywhere in this file or resale_score.py - no
+    # reason to pay Supabase egress for a long CDN URL on every one of
+    # 700k+ rows just to never look at it.
+    return listings_db.fetch_all_rows(exclude_columns=["imageUrl"])
 
 
 def build_groups(listings):
@@ -288,8 +291,15 @@ def write_csv(path, columns, rows):
             writer.writerow(row)
 
 
-def analyze():
-    listings = load_listings()
+def analyze(listings=None):
+    """Pass a pre-fetched `listings` list (e.g. from run_analytics.py) to
+    avoid re-fetching the whole table from Supabase when the caller is
+    about to reuse it for resale_score.py too - egress scales with how
+    much data crosses the wire, and fetching the same (large,
+    ever-growing) table twice in the same few minutes is pure waste.
+    Returns (listings, group_stats, group_avg_lookup) for that reuse."""
+    if listings is None:
+        listings = load_listings()
     now = datetime.now(timezone.utc)
 
     groups = build_groups(listings)
@@ -303,6 +313,8 @@ def analyze():
     print(f"Computed stats for {len(group_stats)} groups (min sample size {MIN_SAMPLE_SIZE}).")
     print(f"Flagged {len(deals)} active listings as deals ({int(DEAL_THRESHOLD_PCT*100)}%+ below group average).")
     print(f"Wrote {GROUP_STATS_PATH} and {DEALS_PATH}.")
+
+    return listings, group_stats, group_avg_lookup
 
 
 if __name__ == "__main__":
