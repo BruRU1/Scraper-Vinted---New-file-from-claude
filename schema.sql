@@ -46,10 +46,12 @@ CREATE TABLE IF NOT EXISTS price_history (
     changed_at  TIMESTAMPTZ
 );
 
--- No index on price_history.listing_id - nothing in this codebase ever
--- looks price history up that way (it's write-only from the scraper's
--- side; archive_resolved.py is the only reader, and it filters by a
--- batch of IDs via = ANY(), which doesn't benefit from a btree here at
--- this table's size). archive_resolved.py drops this index automatically
--- if it finds one from before this was noticed - see
--- listings_db.drop_unused_price_history_index().
+-- No application code queries price_history by listing_id directly, but
+-- this index is still required: listing_id is a foreign key onto
+-- listings, and deleting rows from listings (archive_resolved.py)
+-- makes Postgres check, per row deleted, whether any price_history row
+-- still references it. Without this index that check is a full table
+-- scan every time - fine for a handful of deletes, but it made the
+-- first production run of archive_resolved.py time out and fail
+-- outright once it reached hundreds of thousands of rows. Keep this.
+CREATE INDEX IF NOT EXISTS idx_price_history_listing_id ON price_history (listing_id);

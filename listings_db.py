@@ -275,15 +275,25 @@ def vacuum_full(tables):
         conn.close()
 
 
-def drop_unused_price_history_index():
-    """idx_price_history_listing_id was created expecting price_history
-    to eventually be queried by listing_id, but nothing in this codebase
-    ever does that lookup - it's pure dead weight (schema.sql no longer
-    creates it on a fresh install). Safe to call every run: DROP INDEX
-    IF EXISTS is a no-op once it's already gone."""
+def ensure_price_history_index():
+    """This index looked unused (nothing in this codebase ever queries
+    price_history BY listing_id directly) and an earlier version of this
+    project dropped it on that basis - but it turned out to be load-
+    bearing for a completely different reason: price_history.listing_id
+    is a foreign key onto listings, and deleting rows from listings (as
+    archive_resolved.py does) makes Postgres check, for every row being
+    deleted, whether any price_history row still references it. Without
+    an index on that column, each check is a full table scan - fine for
+    a handful of deletes, catastrophic for hundreds of thousands (this is
+    exactly what made the first production run of archive_resolved.py
+    time out and fail). CREATE INDEX IF NOT EXISTS is a no-op once it
+    already exists, so this is safe to call every run."""
     with get_connection() as conn:
         with conn.cursor() as cur:
-            cur.execute("DROP INDEX IF EXISTS idx_price_history_listing_id")
+            cur.execute(
+                "CREATE INDEX IF NOT EXISTS idx_price_history_listing_id "
+                "ON price_history (listing_id)"
+            )
         conn.commit()
 
 
