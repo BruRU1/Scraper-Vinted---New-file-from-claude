@@ -141,13 +141,15 @@ jobs:
         # check again) out of the live database into a compressed
         # archive file in the repo - keeps the database well under
         # Supabase's free-tier storage limit permanently, instead of
-        # this being a one-off cleanup that just fills back up.
+        # this being a one-off cleanup that just fills back up. Commits
+        # and pushes the archive files itself, in chunks, as it goes -
+        # nothing left for the final commit step below to do with them.
         run: python archive_resolved.py
       - name: Commit and push final data
         run: |
           git config user.name "vinted-scraper-bot"
           git config user.email "actions@users.noreply.github.com"
-          git add data/group_stats.csv data/deals.csv data/resale_opportunities.csv data/listings_resolved_archive.csv.gz data/price_history_archive.csv.gz
+          git add data/group_stats.csv data/deals.csv data/resale_opportunities.csv
           git diff --quiet --cached || git commit -m "Sold-check + analytics $(date -u +'%Y-%m-%d %H:%M UTC')"
           git pull --rebase origin main
           git push origin HEAD:main
