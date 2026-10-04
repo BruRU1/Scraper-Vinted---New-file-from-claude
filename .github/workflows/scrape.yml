@@ -136,16 +136,15 @@ jobs:
         # extra pass over the (large, growing) table's worth of Supabase
         # egress every run.
         run: python run_analytics.py
-      - name: Archive resolved listings
-        # Moves confirmed_sold/deleted listings (nothing left to ever
-        # check again) out of the live database into a compressed
-        # archive file in the repo - keeps the database well under
-        # Supabase's free-tier storage limit permanently, instead of
-        # this being a one-off cleanup that just fills back up. Commits
-        # and pushes the archive files itself, in chunks, as it goes -
-        # nothing left for the final commit step below to do with them.
-        run: python archive_resolved.py
-      - name: Commit and push final data
+      - name: Commit analytics data
+        # Must happen BEFORE "Archive resolved listings" below, which
+        # does its own git commits in chunks and needs a fully clean
+        # working tree to do that safely - `git pull --rebase` refuses
+        # to run at all if any tracked file still has uncommitted
+        # changes sitting around, even ones unrelated to what it's
+        # pulling. Leaving these three files uncommitted until after
+        # archiving is exactly what caused that step to fail outright
+        # on its very first production run.
         run: |
           git config user.name "vinted-scraper-bot"
           git config user.email "actions@users.noreply.github.com"
@@ -153,3 +152,18 @@ jobs:
           git diff --quiet --cached || git commit -m "Sold-check + analytics $(date -u +'%Y-%m-%d %H:%M UTC')"
           git pull --rebase origin main
           git push origin HEAD:main
+      - name: Archive resolved listings
+        # Moves confirmed_sold/deleted listings (nothing left to ever
+        # check again) out of the live database into a compressed
+        # archive file in the repo - keeps the database well under
+        # Supabase's free-tier storage limit permanently, instead of
+        # this being a one-off cleanup that just fills back up. Commits
+        # and pushes the archive files itself, in chunks, as it goes.
+        # continue-on-error: each chunk is independently safe (archived
+        # and pushed to git before its rows are deleted from the
+        # database), so a failure partway through leaves nothing
+        # inconsistent - whatever wasn't reached yet just gets picked up
+        # on the next run, rather than needing this whole job to be
+        # treated as failed.
+        continue-on-error: true
+        run: python archive_resolved.py
