@@ -21,6 +21,14 @@ only ever put one chunk's worth of already-deleted rows at risk of not
 having reached git yet - never anything from a chunk that already
 completed, and never the whole run's worth of newly-resolved listings.
 
+Every row's listing_id is tracked as it's added to the archive, and a
+row already present is never added again - this makes re-running safe
+even right after a partial failure where a chunk's commit succeeded but
+something after it (the push, say) didn't, which would otherwise leave
+that chunk's rows sitting in both the archive AND the live database at
+once. The next run just finishes deleting them from the database
+without duplicating them in the archive.
+
 After writing the archive and deleting the rows from the live tables,
 also runs VACUUM FULL - a plain DELETE only marks rows as removable, it
 doesn't actually shrink the database on disk (or reduce what counts
@@ -40,11 +48,12 @@ Output files (gzip-compressed CSV):
 
 Run manually:  DATABASE_URL=postgresql://... python archive_resolved.py
 Runs automatically as a step in the "merge-and-analyze" job in
-.github/workflows/scrape.yml, after run_analytics.py (so this run's own
-stats still see the full data one last time before it's archived) and
-before that job's own final commit (which only ever has group_stats.csv/
-deals.csv/resale_opportunities.csv left to add, since this script
-already committed its own files chunk by chunk).
+.github/workflows/scrape.yml, after run_analytics.py's own output
+(group_stats.csv/deals.csv/resale_opportunities.csv) has already been
+committed and pushed - this script's own chunked commits need a clean
+working tree to do `git pull --rebase` safely, which an earlier version
+of this pipeline got wrong (those three files sitting uncommitted was
+exactly what made this step's first production run fail outright).
 """
 
 import csv
@@ -109,6 +118,11 @@ def main():
 
     archived_listings = load_existing(LISTINGS_ARCHIVE_PATH)
     archived_history = load_existing(HISTORY_ARCHIVE_PATH)
+    # listing_id comes back from the gzipped CSV as a string (csv.DictReader
+    # never knows it's meant to be a number), but every DB-fetched row's
+    # listing_id is a real int (see listings_db._rows_to_dicts) - compare
+    # as int on both sides, or every row below would wrongly look "new".
+    archived_ids = {int(row["listing_id"]) for row in archived_listings}
     print(
         f"Archive already holds {len(archived_listings)} listings and "
         f"{len(archived_history)} price_history rows from previous runs."
@@ -120,23 +134,39 @@ def main():
     for i in range(0, len(resolved), CHUNK_SIZE):
         chunk = resolved[i:i + CHUNK_SIZE]
         chunk_ids = [row["listing_id"] for row in chunk]
-        chunk_history = listings_db.fetch_history_for_listings(chunk_ids)
-
-        archived_listings.extend(chunk)
-        archived_history.extend(chunk_history)
-        write_all(LISTINGS_ARCHIVE_PATH, listings_db.LISTINGS_COLUMNS, archived_listings)
-        write_all(HISTORY_ARCHIVE_PATH, listings_db.HISTORY_COLUMNS, archived_history)
-
-        # Commit BEFORE deleting - if the delete or anything after it
-        # fails, this chunk's rows are already safely archived in git,
-        # never only-deleted-and-not-yet-archived.
         chunk_num = i // CHUNK_SIZE + 1
-        git_commit_and_push(f"Archive chunk {chunk_num}/{num_chunks} of resolved listings")
+
+        # A row can already be in the archive here if an earlier run's
+        # commit for this chunk succeeded but something after it (e.g.
+        # the push) failed, so the database delete for it never ran -
+        # it's sitting in both places at once. Skip re-adding it to the
+        # archive (would duplicate it), but still delete it from the
+        # database below, since it's genuinely still there.
+        new_rows = [row for row in chunk if row["listing_id"] not in archived_ids]
+        if new_rows:
+            new_ids = {row["listing_id"] for row in new_rows}
+            chunk_history = [
+                h for h in listings_db.fetch_history_for_listings(chunk_ids)
+                if h["listing_id"] in new_ids
+            ]
+            archived_listings.extend(new_rows)
+            archived_history.extend(chunk_history)
+            archived_ids.update(new_ids)
+            write_all(LISTINGS_ARCHIVE_PATH, listings_db.LISTINGS_COLUMNS, archived_listings)
+            write_all(HISTORY_ARCHIVE_PATH, listings_db.HISTORY_COLUMNS, archived_history)
+
+            # Commit BEFORE deleting - if the delete or anything after it
+            # fails, this chunk's rows are already safely archived in
+            # git, never only-deleted-and-not-yet-archived.
+            git_commit_and_push(f"Archive chunk {chunk_num}/{num_chunks} of resolved listings")
+        else:
+            print(f"  chunk {chunk_num}/{num_chunks}: already fully archived from an earlier "
+                  f"attempt, just cleaning up the database")
 
         deleted = listings_db.delete_resolved(chunk_ids)
         total_deleted += deleted
-        print(f"  chunk {chunk_num}/{num_chunks}: archived and removed {deleted} listings "
-              f"({total_deleted}/{len(resolved)} so far)")
+        print(f"  chunk {chunk_num}/{num_chunks}: removed {deleted} listings from the database "
+              f"({i + len(chunk)}/{len(resolved)} processed so far)")
 
     print(
         f"Archive now holds {len(archived_listings)} listings and "
