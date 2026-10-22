@@ -22,12 +22,22 @@ Groups with fewer than MIN_SAMPLE_SIZE listings are excluded from
 group_stats.csv and never used to flag deals - too few comparable
 listings makes the average unreliable/noisy rather than meaningful.
 
+avg_days_to_disappear draws on BOTH the live database's own resolved
+rows AND everything archive_resolved.py has already moved out to
+data/listings_resolved_archive.csv.gz. Using the live database alone
+would make this signal quietly shrink toward nothing over time, since
+archiving runs every scheduled scrape and keeps draining exactly the
+confirmed_sold/deleted rows this stat depends on - the full history
+never actually goes away, it just moves to that file, so this reads
+both instead of losing it.
+
 Run manually:  DATABASE_URL=postgresql://... python analyze.py
 Runs automatically as part of the "merge-and-analyze" job in
 .github/workflows/scrape.yml.
 """
 
 import csv
+import gzip
 from datetime import datetime, timezone
 from pathlib import Path
 from statistics import mean, median
@@ -38,6 +48,7 @@ ROOT = Path(__file__).parent
 DATA_DIR = ROOT / "data"
 GROUP_STATS_PATH = DATA_DIR / "group_stats.csv"
 DEALS_PATH = DATA_DIR / "deals.csv"
+ARCHIVE_PATH = DATA_DIR / "listings_resolved_archive.csv.gz"
 
 # A group (brand+category+condition+size) needs at least this many
 # listings before its average is considered reliable enough to use.
@@ -156,7 +167,53 @@ def build_groups(listings):
     return groups
 
 
-def compute_group_stats(groups, now):
+def load_archive_days_to_disappear():
+    """Returns {group_key: [days_to_disappear, ...]} computed from every
+    listing archive_resolved.py has already moved out of the live
+    database. Without this, a group's "how fast does this sell"
+    history would only ever reflect whatever confirmed_sold/deleted rows
+    happen to still be sitting in the live table - and since archiving
+    runs every scheduled scrape and keeps draining exactly those rows
+    out, that signal would quietly shrink toward nothing over time even
+    though the full history never actually went away, just moved to
+    this file."""
+    if not ARCHIVE_PATH.exists():
+        return {}
+
+    result = {}
+    with gzip.open(ARCHIVE_PATH, "rt", newline="", encoding="utf-8") as f:
+        for row in csv.DictReader(f):
+            first_seen = parse_dt(row.get("first_seen"))
+            if first_seen is None:
+                continue
+
+            status = row.get("status")
+            if status == "confirmed_sold":
+                resolved = parse_dt(row.get("sold_confirmed_at"))
+            elif status == "deleted":
+                resolved = parse_dt(row.get("date_disappeared"))
+            else:
+                continue
+            if resolved is None:
+                continue
+
+            category = normalize(row.get("category"))
+            if not passes_price_floor(category, parse_price(row.get("current_price"))):
+                continue
+
+            key = (
+                normalize(row.get("brand")),
+                category,
+                normalize(row.get("condition")),
+                normalize(canonical_size(row.get("size"))),
+            )
+            result.setdefault(key, []).append((resolved - first_seen).days)
+
+    return result
+
+
+def compute_group_stats(groups, now, archived_days_to_disappear=None):
+    archived_days_to_disappear = archived_days_to_disappear or {}
     stats_rows = []
     # group_key -> avg_price, for use when flagging deals
     group_avg_lookup = {}
@@ -184,7 +241,10 @@ def compute_group_stats(groups, now):
             continue  # not enough data to trust an average for this group
 
         days_listed_values = []
-        days_to_disappear_values = []
+        # Seeded from the archive - a listing is either still live (and
+        # handled by the loop below) or already archived (and only here),
+        # never both, so there's no double-counting between the two.
+        days_to_disappear_values = list(archived_days_to_disappear.get(key, []))
 
         for r in rows:
             first_seen = parse_dt(r.get("first_seen"))
@@ -303,7 +363,8 @@ def analyze(listings=None):
     now = datetime.now(timezone.utc)
 
     groups = build_groups(listings)
-    group_stats, group_avg_lookup = compute_group_stats(groups, now)
+    archived_days_to_disappear = load_archive_days_to_disappear()
+    group_stats, group_avg_lookup = compute_group_stats(groups, now, archived_days_to_disappear)
     deals = find_deals(listings, group_avg_lookup, now)
 
     write_csv(GROUP_STATS_PATH, GROUP_STATS_COLUMNS, group_stats)
