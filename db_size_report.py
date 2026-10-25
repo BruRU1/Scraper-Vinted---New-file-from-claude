@@ -76,6 +76,30 @@ def main():
             history_count = cur.fetchone()[0]
             print(f"\nprice_history rows: {history_count:,}")
 
+            print("\nlikely_sold_or_removed backlog, by age since date_disappeared:")
+            cur.execute(
+                """
+                SELECT
+                    CASE
+                        WHEN date_disappeared IS NULL THEN 'no date_disappeared'
+                        WHEN now() - date_disappeared < interval '7 days' THEN '0-7 days'
+                        WHEN now() - date_disappeared < interval '14 days' THEN '7-14 days'
+                        WHEN now() - date_disappeared < interval '30 days' THEN '14-30 days'
+                        WHEN now() - date_disappeared < interval '45 days' THEN '30-45 days'
+                        WHEN now() - date_disappeared < interval '60 days' THEN '45-60 days'
+                        WHEN now() - date_disappeared < interval '90 days' THEN '60-90 days'
+                        ELSE '90+ days'
+                    END AS age_bucket,
+                    count(*)
+                FROM listings
+                WHERE status = 'likely_sold_or_removed'
+                GROUP BY 1
+                ORDER BY min(now() - date_disappeared)
+                """
+            )
+            for bucket, count in cur.fetchall():
+                print(f"  {bucket:<22} {count:,}")
+
 
 if __name__ == "__main__":
     main()
