@@ -28,6 +28,10 @@ Safety measures kept from before:
     each run, so nothing is skipped forever, it just takes another run.
   - Results are written incrementally, not only at the very end, so a
     timeout partway through still keeps whatever progress was made.
+  - A check that errors (timeout, network blip, anything short of a
+    confirmed 404 - see sold_checker.py) produces no result at all,
+    rather than being finalized as "deleted". The listing is simply left
+    as "likely_sold_or_removed" and picked up again on a future run.
 
 Takes the batch number as a command-line argument:
 
@@ -45,7 +49,7 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
-from sold_checker import check_listing_page, USER_AGENT
+from sold_checker import block_unneeded_resources, check_listing_page, USER_AGENT
 from playwright.sync_api import sync_playwright
 
 ROOT = Path(__file__).parent
@@ -76,6 +80,14 @@ results_lock = threading.Lock()
 
 
 def build_result(listing_id, outcome, sold_price, now_iso):
+    """Returns None for "error" - deliberately not a result at all.
+    merge_batches.py/listings_db.apply_batch_results only ever touch
+    listing_ids that appear in a result, so a listing this returns None
+    for is left completely untouched in the database: still
+    "likely_sold_or_removed", same consecutive_misses, same
+    date_disappeared - split_batches.py will naturally pick it again on
+    a future run instead of it being wrongly finalized as "deleted" over
+    what might have just been a timeout."""
     if outcome == "sold":
         return {
             "listing_id": listing_id,
@@ -96,7 +108,7 @@ def build_result(listing_id, outcome, sold_price, now_iso):
             "date_disappeared": "",
             "last_seen": now_iso,
         }
-    else:  # gone
+    elif outcome == "gone":
         return {
             "listing_id": listing_id,
             "status": "deleted",
@@ -106,6 +118,8 @@ def build_result(listing_id, outcome, sold_price, now_iso):
             "date_disappeared": now_iso,
             "last_seen": "",
         }
+    else:  # "error" - genuinely unknown, not a confirmed outcome
+        return None
 
 
 def write_results(results_path):
@@ -118,7 +132,7 @@ def write_results(results_path):
             writer.writerow(row)
 
 
-def worker(worker_id, rows, batch_num, total, results_path):
+def worker(worker_id, rows, batch_num, results_path):
     # Each worker thread gets its own Playwright driver + browser. Sharing
     # one browser (created in the main thread) across threads doesn't
     # work with Playwright's sync API - see module docstring.
@@ -126,8 +140,9 @@ def worker(worker_id, rows, batch_num, total, results_path):
         browser = p.chromium.launch(headless=True)
         context = browser.new_context(user_agent=USER_AGENT)
         page = context.new_page()
+        block_unneeded_resources(page)
 
-        for row in rows:
+        for i, row in enumerate(rows, start=1):
             url = row["url"]
             listing_id = row["listing_id"]
 
@@ -135,17 +150,18 @@ def worker(worker_id, rows, batch_num, total, results_path):
             now_iso = datetime.now(timezone.utc).isoformat()
             result = build_result(listing_id, outcome, sold_price, now_iso)
 
-            with results_lock:
-                results.append(result)
-                global_checked = len(results)
+            if result is not None:
+                with results_lock:
+                    results.append(result)
+                    global_checked = len(results)
 
-            print(f"  [{batch_num}/p{worker_id}] ({global_checked}/{total}) "
+                if global_checked % SAVE_EVERY == 0:
+                    write_results(results_path)
+                    print(f"    (progress saved: {global_checked} so far)")
+
+            print(f"  [{batch_num}/p{worker_id}] ({i}/{len(rows)}) "
                   f"{listing_id} -> {outcome.upper()}"
                   + (f" (£{sold_price})" if sold_price else ""))
-
-            if global_checked % SAVE_EVERY == 0:
-                write_results(results_path)
-                print(f"    (progress saved: {global_checked} so far)")
 
             time.sleep(random.uniform(2, 5))
 
@@ -197,7 +213,6 @@ def main():
         return
 
     chunks = split_for_workers(batch, CONCURRENT_PAGES)
-    total = len(batch)
 
     threads = []
     for worker_id, chunk in enumerate(chunks):
@@ -205,7 +220,7 @@ def main():
             continue
         t = threading.Thread(
             target=worker,
-            args=(worker_id, chunk, batch_num, total, results_path),
+            args=(worker_id, chunk, batch_num, results_path),
         )
         t.start()
         threads.append(t)
