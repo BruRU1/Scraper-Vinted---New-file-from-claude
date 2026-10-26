@@ -237,6 +237,20 @@
   .tier-fair { background: var(--surface-2); color: var(--ink-muted); }
   .tier-fair .tier-dot { background: var(--ink-faint); }
 
+  .conf-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 3px 8px;
+    border-radius: 6px;
+    font-size: 11.5px;
+    font-weight: 500;
+    white-space: nowrap;
+  }
+  .conf-high { background: var(--good-bg); color: var(--good); }
+  .conf-medium { background: var(--accent-tint); color: var(--accent-strong); }
+  .conf-low { background: var(--surface-2); color: var(--ink-faint); }
+
   .view-link { color: var(--ink-faint); font-size: 12px; text-decoration: none; white-space: nowrap; }
   .view-link:hover { color: var(--accent-strong); text-decoration: underline; }
 
@@ -335,6 +349,15 @@
         <input id="f-minprofit" type="number" min="0" step="1" value="0" style="width:90px">
       </div>
       <div class="field">
+        <label for="f-confidence">Confidence</label>
+        <select id="f-confidence">
+          <option value="">Any</option>
+          <option value="high">High (sold data)</option>
+          <option value="medium">Medium (some sold data)</option>
+          <option value="low">Low (asking price / thin data)</option>
+        </select>
+      </div>
+      <div class="field">
         <label for="f-sort">Sort by</label>
         <select id="f-sort">
           <option value="score">Score</option>
@@ -355,11 +378,12 @@
             <th>Price</th>
             <th>Profit</th>
             <th>Discount</th>
+            <th>Confidence</th>
             <th></th>
           </tr>
         </thead>
         <tbody id="rows">
-          <tr><td colspan="8" class="state-msg">Loading live data&hellip;</td></tr>
+          <tr><td colspan="9" class="state-msg">Loading live data&hellip;</td></tr>
         </tbody>
       </table>
     </div>
@@ -370,10 +394,11 @@
     <details class="caveats">
       <summary>What this is (and isn't)</summary>
       <ul>
-        <li><strong>"Group average"</strong> is what similar active listings are currently asking, not a proven sale price &ndash; Vinted items often sell for less after offers.</li>
-        <li><strong>Profit</strong> ignores shipping, Vinted's buyer protection fee, and your own time/effort.</li>
+        <li><strong>Benchmark price</strong> is, whenever possible, the average REAL confirmed sale price for the same brand/category/condition/size (shown as "Confirmed sales" or "Some sales data"). Only when there isn't enough sold data does it fall back to what similar items are currently asking (shown as "Asking price only") &ndash; which is not a proven sale price, since Vinted items often sell for less after offers.</li>
+        <li>The <strong>Confidence</strong> badge's number is how many confirmed sales that benchmark is based on. A badge of "Asking price only" or a low sale count means treat the profit estimate with more caution &ndash; filter them out with the Confidence dropdown above if you only want sale-backed numbers.</li>
+        <li><strong>Profit</strong> ignores shipping and your own time/effort. As the seller of a resold item, Vinted charges no listing fee (only the buyer pays a buyer-protection fee), so no fee is deducted here.</li>
         <li>Only listings from genuine Vinted category browses are included &ndash; brand keyword-search results are excluded here since they catch too much unrelated junk to safely act on.</li>
-        <li><strong>Score</strong> blends how underpriced an item is (70%) with how quickly its group has historically sold (30%) &ndash; it's a ranking, not a currency amount.</li>
+        <li><strong>Score</strong> blends how underpriced an item is (70%) with how quickly its group has historically sold (30%), then scales down for lower-confidence benchmarks &ndash; it's a ranking, not a currency amount.</li>
       </ul>
     </details>
   </div>
@@ -399,7 +424,14 @@
     sort: "score",
     search: "",
     category: "",
-    minProfit: 0
+    minProfit: 0,
+    confidence: ""
+  };
+
+  var CONFIDENCE_LABEL = {
+    high: "Confirmed sales",
+    medium: "Some sales data",
+    low: "Asking price only"
   };
 
   function loadPrefs() {
@@ -410,13 +442,15 @@
       if (p.sort) state.sort = p.sort;
       if (p.category) state.category = p.category;
       if (typeof p.minProfit === "number") state.minProfit = p.minProfit;
+      if (p.confidence) state.confidence = p.confidence;
     } catch (e) { /* private mode etc - ignore */ }
   }
 
   function savePrefs() {
     try {
       localStorage.setItem("resale-finder-prefs", JSON.stringify({
-        sort: state.sort, category: state.category, minProfit: state.minProfit
+        sort: state.sort, category: state.category, minProfit: state.minProfit,
+        confidence: state.confidence
       }));
     } catch (e) { /* ignore */ }
   }
@@ -455,12 +489,14 @@
     var discounts = rows.map(function (r) { return r.pct; });
     var cats = {};
     rows.forEach(function (r) { cats[r.category] = true; });
+    var soldBacked = rows.filter(function (r) { return r.source === "sold"; }).length;
+    var soldPct = rows.length ? Math.round((soldBacked / rows.length) * 100) : 0;
 
     el.innerHTML =
       '<div class="kpi"><div class="label">Opportunities</div><div class="value">' + rows.length.toLocaleString() + '</div><div class="sub">active listings flagged</div></div>' +
-      '<div class="kpi"><div class="label">Median profit</div><div class="value">£' + median(profits).toFixed(2) + '</div><div class="sub">vs. group average price</div></div>' +
-      '<div class="kpi"><div class="label">Median discount</div><div class="value">' + median(discounts).toFixed(0) + '%</div><div class="sub">below group average</div></div>' +
-      '<div class="kpi"><div class="label">Categories</div><div class="value">' + Object.keys(cats).length + '</div><div class="sub">covered by these picks</div></div>';
+      '<div class="kpi"><div class="label">Median profit</div><div class="value">£' + median(profits).toFixed(2) + '</div><div class="sub">vs. benchmark price</div></div>' +
+      '<div class="kpi"><div class="label">Median discount</div><div class="value">' + median(discounts).toFixed(0) + '%</div><div class="sub">below benchmark</div></div>' +
+      '<div class="kpi"><div class="label">Backed by sales</div><div class="value">' + soldPct + '%</div><div class="sub">' + soldBacked.toLocaleString() + ' of ' + rows.length.toLocaleString() + ' use real sold prices</div></div>';
   }
 
   function renderCatBars(rows) {
@@ -499,6 +535,7 @@
     var filtered = state.all.filter(function (r) {
       if (state.category && r.category !== state.category) return false;
       if (state.minProfit && r.profit < state.minProfit) return false;
+      if (state.confidence && r.confidence !== state.confidence) return false;
       if (q && r.searchText.indexOf(q) === -1) return false;
       return true;
     });
@@ -517,7 +554,7 @@
     var visible = state.filtered.slice(0, state.shown);
 
     if (!visible.length) {
-      tbody.innerHTML = '<tr><td colspan="8" class="state-msg">No listings match these filters.</td></tr>';
+      tbody.innerHTML = '<tr><td colspan="9" class="state-msg">No listings match these filters.</td></tr>';
     } else {
       tbody.innerHTML = visible.map(function (r) {
         var tier = scoreTier(r.score);
@@ -528,9 +565,15 @@
             (r.brand ? '<span class="item-brand">' + escapeHtml(r.brand) + '</span>' : '') + '</td>' +
           '<td>' + escapeHtml(titleCaseCategory(r.category)) + '</td>' +
           '<td>' + escapeHtml(r.condition) + (r.size ? ' &middot; ' + escapeHtml(r.size) : '') + '</td>' +
-          '<td class="price-cell num">£' + r.price.toFixed(2) + '<span class="price-arrow">&rarr;</span><span class="avg-price">£' + r.groupAvg.toFixed(2) + '</span></td>' +
+          '<td class="price-cell num">£' + r.price.toFixed(2) + '<span class="price-arrow">&rarr;</span><span class="avg-price">£' + r.benchmark.toFixed(2) + '</span></td>' +
           '<td class="num profit">£' + r.profit.toFixed(2) + '</td>' +
           '<td class="num">' + r.pct.toFixed(0) + '%<span class="discount-bar"><span style="width:' + barPct + '%"></span></span></td>' +
+          '<td><span class="conf-badge conf-' + r.confidence + '" title="' +
+            escapeHtml(r.source === 'sold'
+              ? r.soldN + ' confirmed sale' + (r.soldN === 1 ? '' : 's') + ' of this exact brand/category/condition/size'
+              : 'No benchmark from confirmed sales yet (' + r.soldN + ' so far) - using the average asking price of other active listings instead') +
+            '">' + escapeHtml(CONFIDENCE_LABEL[r.confidence] || r.confidence) +
+            (r.source === 'sold' ? ' (' + r.soldN + ')' : '') + '</span></td>' +
           '<td><a class="view-link" href="' + escapeHtml(r.url) + '" target="_blank" rel="noopener">View &#8599;</a></td>' +
           '</tr>';
       }).join("");
@@ -552,7 +595,7 @@
 
   function showError(msg) {
     document.getElementById("rows").innerHTML =
-      '<tr><td colspan="8"><div class="state-msg">' + escapeHtml(msg) +
+      '<tr><td colspan="9"><div class="state-msg">' + escapeHtml(msg) +
       '<br><button class="more-btn" id="retry-btn">Retry</button></div></td></tr>';
     var retry = document.getElementById("retry-btn");
     if (retry) retry.addEventListener("click", init);
@@ -562,6 +605,7 @@
     loadPrefs();
     document.getElementById("f-sort").value = state.sort;
     document.getElementById("f-minprofit").value = state.minProfit;
+    document.getElementById("f-confidence").value = state.confidence;
 
     Papa.parse(RAW_BASE + "resale_opportunities.csv", {
       download: true,
@@ -579,10 +623,13 @@
               condition: r.condition || "",
               size: r.size || "",
               price: parseFloat(r.current_price) || 0,
-              groupAvg: parseFloat(r.group_avg_price) || 0,
+              benchmark: parseFloat(r.benchmark_price) || 0,
               profit: parseFloat(r.estimated_profit) || 0,
               pct: parseFloat(r.pct_below_avg) || 0,
               score: parseFloat(r.resale_score) || 0,
+              source: r.benchmark_source || "asking",
+              soldN: parseInt(r.sold_sample_size, 10) || 0,
+              confidence: r.confidence || "low",
               searchText: ((r.title || "") + " " + (r.brand || "")).toLowerCase()
             };
           });
@@ -616,6 +663,11 @@
   });
   document.getElementById("f-minprofit").addEventListener("input", function (e) {
     state.minProfit = parseFloat(e.target.value) || 0;
+    savePrefs();
+    applyFilters();
+  });
+  document.getElementById("f-confidence").addEventListener("change", function (e) {
+    state.confidence = e.target.value;
     savePrefs();
     applyFilters();
   });

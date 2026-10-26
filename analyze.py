@@ -82,6 +82,8 @@ GROUP_STATS_COLUMNS = [
     "avg_days_listed",       # for still-active listings: now - first_seen
     "avg_days_to_disappear",  # for confirmed_sold/deleted/likely_sold_or_removed
                               # listings: (sold/disappeared time) - first_seen
+    "avg_sold_price",         # mean of REAL confirmed sale prices (live + archive)
+    "sold_sample_size",       # how many confirmed sales that average is based on
 ]
 
 DEALS_COLUMNS = [
@@ -212,8 +214,72 @@ def load_archive_days_to_disappear():
     return result
 
 
-def compute_group_stats(groups, now, archived_days_to_disappear=None):
+def load_archived_sold_prices():
+    """Returns {group_key: [sold_price, ...]} from every confirmed_sold
+    listing archive_resolved.py has already moved out of the live
+    database. Mirrors load_archive_days_to_disappear()'s reasoning -
+    without reading the archive too, sold-price history would shrink
+    toward nothing as archiving keeps draining confirmed_sold rows out
+    of the live table every run."""
+    if not ARCHIVE_PATH.exists():
+        return {}
+
+    result = {}
+    with gzip.open(ARCHIVE_PATH, "rt", newline="", encoding="utf-8") as f:
+        for row in csv.DictReader(f):
+            if row.get("status") != "confirmed_sold":
+                continue
+
+            sold_price = parse_price(row.get("sold_price"))
+            if sold_price is None:
+                continue
+
+            category = normalize(row.get("category"))
+            if not passes_price_floor(category, sold_price):
+                continue
+
+            key = (
+                normalize(row.get("brand")),
+                category,
+                normalize(row.get("condition")),
+                normalize(canonical_size(row.get("size"))),
+            )
+            result.setdefault(key, []).append(sold_price)
+
+    return result
+
+
+def compute_sold_benchmark_lookup(groups, archived_sold_prices):
+    """Returns {group_key: (avg_sold_price, sold_sample_size)} built from
+    REAL confirmed sale prices only - both still-live confirmed_sold rows
+    (not yet archived) and whatever archive_resolved.py has already moved
+    out to the archive file. Deliberately independent of
+    MIN_SAMPLE_SIZE/the active-listing count below: a group's sold-price
+    history doesn't disappear just because few listings of it happen to
+    be active right now, and this is the one signal resale_score.py
+    should trust most (an actual sale, not just an asking price)."""
+    lookup = {}
+    for key, rows in groups.items():
+        _, category, _, _ = key
+        sold_prices = []
+        for r in rows:
+            if r.get("status") != "confirmed_sold":
+                continue
+            sold_price = parse_price(r.get("sold_price"))
+            if sold_price is None or not passes_price_floor(category, sold_price):
+                continue
+            sold_prices.append(sold_price)
+
+        sold_prices.extend(archived_sold_prices.get(key, []))
+        if sold_prices:
+            lookup[key] = (round(mean(sold_prices), 2), len(sold_prices))
+
+    return lookup
+
+
+def compute_group_stats(groups, now, archived_days_to_disappear=None, sold_benchmark_lookup=None):
     archived_days_to_disappear = archived_days_to_disappear or {}
+    sold_benchmark_lookup = sold_benchmark_lookup or {}
     stats_rows = []
     # group_key -> avg_price, for use when flagging deals
     group_avg_lookup = {}
@@ -266,6 +332,8 @@ def compute_group_stats(groups, now, archived_days_to_disappear=None):
         avg_price = round(mean(prices), 2)
         group_avg_lookup[key] = avg_price
 
+        sold_avg, sold_n = sold_benchmark_lookup.get(key, ("", 0))
+
         stats_rows.append(
             {
                 "brand": brand,
@@ -285,6 +353,8 @@ def compute_group_stats(groups, now, archived_days_to_disappear=None):
                     if days_to_disappear_values
                     else ""
                 ),
+                "avg_sold_price": sold_avg,
+                "sold_sample_size": sold_n,
             }
         )
 
@@ -357,14 +427,19 @@ def analyze(listings=None):
     about to reuse it for resale_score.py too - egress scales with how
     much data crosses the wire, and fetching the same (large,
     ever-growing) table twice in the same few minutes is pure waste.
-    Returns (listings, group_stats, group_avg_lookup) for that reuse."""
+    Returns (listings, group_stats, group_avg_lookup, sold_benchmark_lookup)
+    for that reuse."""
     if listings is None:
         listings = load_listings()
     now = datetime.now(timezone.utc)
 
     groups = build_groups(listings)
     archived_days_to_disappear = load_archive_days_to_disappear()
-    group_stats, group_avg_lookup = compute_group_stats(groups, now, archived_days_to_disappear)
+    archived_sold_prices = load_archived_sold_prices()
+    sold_benchmark_lookup = compute_sold_benchmark_lookup(groups, archived_sold_prices)
+    group_stats, group_avg_lookup = compute_group_stats(
+        groups, now, archived_days_to_disappear, sold_benchmark_lookup
+    )
     deals = find_deals(listings, group_avg_lookup, now)
 
     write_csv(GROUP_STATS_PATH, GROUP_STATS_COLUMNS, group_stats)
@@ -372,10 +447,11 @@ def analyze(listings=None):
 
     print(f"Loaded {len(listings)} listings.")
     print(f"Computed stats for {len(group_stats)} groups (min sample size {MIN_SAMPLE_SIZE}).")
+    print(f"{len(sold_benchmark_lookup)} groups have at least one confirmed sale price.")
     print(f"Flagged {len(deals)} active listings as deals ({int(DEAL_THRESHOLD_PCT*100)}%+ below group average).")
     print(f"Wrote {GROUP_STATS_PATH} and {DEALS_PATH}.")
 
-    return listings, group_stats, group_avg_lookup
+    return listings, group_stats, group_avg_lookup, sold_benchmark_lookup
 
 
 if __name__ == "__main__":

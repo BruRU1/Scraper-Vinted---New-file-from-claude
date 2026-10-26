@@ -20,8 +20,13 @@ import resale_score
 
 
 def main():
-    listings, group_stats, group_avg_lookup = analyze.analyze()
-    resale_score.main(listings=listings, group_stats=group_stats, group_avg_lookup=group_avg_lookup)
+    listings, group_stats, group_avg_lookup, sold_benchmark_lookup = analyze.analyze()
+    resale_score.main(
+        listings=listings,
+        group_stats=group_stats,
+        group_avg_lookup=group_avg_lookup,
+        sold_benchmark_lookup=sold_benchmark_lookup,
+    )
 
 
 if __name__ == "__main__":
