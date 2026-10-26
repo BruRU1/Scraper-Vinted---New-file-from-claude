@@ -56,6 +56,7 @@ LISTINGS_COLUMNS = [
     "consecutive_misses",
     "sold_price",
     "sold_confirmed_at",
+    "reactivation_count",
 ]
 
 # In-memory dict key -> DB column name, only where they differ. Postgres
@@ -105,6 +106,7 @@ def _rows_to_dicts(db_rows, columns):
         row["listing_id"] = int(row["listing_id"])
         row["consecutive_misses"] = int(row["consecutive_misses"] or 0)
         row["price_drops"] = int(row["price_drops"] or 0)
+        row["reactivation_count"] = int(row["reactivation_count"] or 0)
         result.append(row)
     return result
 
@@ -297,6 +299,22 @@ def ensure_price_history_index():
         conn.commit()
 
 
+def ensure_reactivation_count_column():
+    """Adds the reactivation_count column (default 0) to an existing
+    listings table that predates it, backfilling every current row to 0
+    in the same statement - a fast metadata-only operation in Postgres
+    since the default is a constant, not a per-row computation. A no-op
+    once the column already exists. Safe to call every run, same as
+    ensure_price_history_index()."""
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "ALTER TABLE listings ADD COLUMN IF NOT EXISTS "
+                "reactivation_count INTEGER NOT NULL DEFAULT 0"
+            )
+        conn.commit()
+
+
 def fetch_unconfirmed(order_by_oldest=True):
     """(listing_id, url) pairs still marked likely_sold_or_removed, for
     split_batches.py. Sorting happens in Postgres instead of Python -
@@ -333,6 +351,7 @@ def apply_batch_results(results_by_status):
     listing_id, sold_price, sold_confirmed_at, consecutive_misses,
     date_disappeared, last_seen).
     """
+    ensure_reactivation_count_column()
     total = 0
     with get_connection() as conn:
         with conn.cursor() as cur:
@@ -362,7 +381,17 @@ def apply_batch_results(results_by_status):
                     "UPDATE listings SET status = 'active', "
                     "consecutive_misses = data.consecutive_misses::integer, "
                     "date_disappeared = NULL, sold_price = NULL, sold_confirmed_at = NULL, "
-                    "last_seen = COALESCE(data.last_seen::timestamptz, listings.last_seen) "
+                    "last_seen = COALESCE(data.last_seen::timestamptz, listings.last_seen), "
+                    # This row ONLY lands here because check_batch.py visited its
+                    # page directly and found it still active despite having
+                    # vanished from the category crawl (that's the "active"
+                    # outcome check_listing_page returns) - i.e. a confirmed
+                    # buried-but-real listing, not a guess. Counting it lets
+                    # scraper.py's mark_missing_listings() back off how often it
+                    # re-flags this specific listing as missing next time,
+                    # instead of repeating the same short threshold forever on
+                    # something structurally always invisible to the crawl.
+                    "reactivation_count = listings.reactivation_count + 1 "
                     "FROM (VALUES %s) AS data (listing_id, consecutive_misses, last_seen) "
                     "WHERE listings.listing_id = data.listing_id::bigint",
                     values,

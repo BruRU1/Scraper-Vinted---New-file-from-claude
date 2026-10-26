@@ -36,6 +36,20 @@ merge_batches.py) to confirm what really happened - sold, still active
 overly-eager flag here isn't permanent: it gets corrected automatically
 the next time the batch checker reaches it.
 
+A listing confirmed "still active, just buried" this way goes right back
+to being judged by the same category crawl that couldn't see it in the
+first place - so if its position genuinely never resurfaces within the
+pages scraped, it misses again, gets re-flagged again after the same 3
+runs, gets reconfirmed buried again, forever. Each cycle burns a
+check-batch slot re-proving something already known. mark_missing_listings()
+backs this off: missing_runs_threshold() doubles the threshold for every
+past reactivation (3 -> 6 -> 12 -> ...), capped at MAX_MISSING_RUNS_THRESHOLD,
+so a chronic repeat offender is re-queued for confirmation far less often
+instead of on the same aggressive cadence as a listing seeing this for the
+first time - freeing real capacity for listings that are actually newly
+gone, while still eventually re-checking it rather than exempting it from
+checking forever.
+
 Only pulls the full row data for "active"/"likely_sold_or_removed"
 listings from the database (listings_db.load_for_scrape()) - those are
 the only ones this script ever reconciles or reactivates. Every other
@@ -68,8 +82,28 @@ EXTRACT_JS_PATH = ROOT / "extract.js"
 # Number of consecutive runs a previously-active listing must be absent
 # from before we flag it as likely sold/removed. Keeps a single missed
 # appearance (e.g. pagination shuffled by new listings) from being a
-# false positive.
+# false positive. This is the threshold for a listing on its first time
+# going missing - see missing_runs_threshold() for how it backs off after
+# that for a listing confirmed to be a repeat "just buried" offender.
 MISSING_RUNS_THRESHOLD = 3
+
+# However many times a listing has already been reactivated (confirmed
+# buried-but-active), never require more than this many consecutive
+# misses before re-checking it again - an ever-growing backoff would
+# eventually stop re-verifying it at all, and it could genuinely sell or
+# get deleted at any time like anything else.
+MAX_MISSING_RUNS_THRESHOLD = MISSING_RUNS_THRESHOLD * 64  # 192 runs, ~48 days
+
+
+def missing_runs_threshold(reactivation_count):
+    """How many consecutive missed runs this specific listing needs
+    before being flagged likely_sold_or_removed again. Doubles per past
+    reactivation (confirmed buried-but-active) - see this module's
+    docstring for why."""
+    return min(
+        MISSING_RUNS_THRESHOLD * (2 ** reactivation_count),
+        MAX_MISSING_RUNS_THRESHOLD,
+    )
 
 USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
@@ -149,6 +183,7 @@ def reconcile(listings_by_url, url_to_id, next_id, scraped_listing, category_nam
             "consecutive_misses": 0,
             "sold_price": "",
             "sold_confirmed_at": "",
+            "reactivation_count": 0,
         }
     else:
         # Known listing (whether it was active or previously flagged as
@@ -191,10 +226,12 @@ def reconcile(listings_by_url, url_to_id, next_id, scraped_listing, category_nam
 
 def mark_missing_listings(listings_by_url, seen_urls_this_run, now_iso):
     """Any listing still marked active that wasn't seen this run gets its
-    miss counter bumped; past the threshold it's flagged as likely gone.
-    Returns the list of (listing_id, url) pairs newly flagged THIS run,
-    for logging - split_batches.py doesn't rely on this list, it pulls
-    the full likely_sold_or_removed queue straight from the database."""
+    miss counter bumped; past ITS OWN threshold (missing_runs_threshold(),
+    higher for a listing that's been reactivated as buried-but-active
+    before) it's flagged as likely gone. Returns the list of (listing_id,
+    url) pairs newly flagged THIS run, for logging - split_batches.py
+    doesn't rely on this list, it pulls the full likely_sold_or_removed
+    queue straight from the database."""
     newly_flagged = []
     for url, row in listings_by_url.items():
         if url in seen_urls_this_run:
@@ -203,7 +240,8 @@ def mark_missing_listings(listings_by_url, seen_urls_this_run, now_iso):
             continue
 
         row["consecutive_misses"] += 1
-        if row["consecutive_misses"] >= MISSING_RUNS_THRESHOLD:
+        threshold = missing_runs_threshold(row.get("reactivation_count") or 0)
+        if row["consecutive_misses"] >= threshold:
             row["status"] = "likely_sold_or_removed"
             row["date_disappeared"] = now_iso
             # A thumbnail link for a listing that's not confirmed to
@@ -224,6 +262,7 @@ def scrape():
     pages_per_category = config.get("pages_per_category", 10)
     categories = config["categories"]
 
+    listings_db.ensure_reactivation_count_column()
     listings_by_url, url_to_id, next_id = listings_db.load_for_scrape()
 
     seen_urls_this_run = set()
