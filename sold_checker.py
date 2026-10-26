@@ -5,7 +5,7 @@ Shared logic for visiting an individual Vinted listing page directly and
 determining what actually happened to it, rather than just inferring
 "likely sold" from it disappearing off category/search pages.
 
-For a given listing URL, visiting the page tells us one of three things:
+For a given listing URL, visiting the page tells us one of four things:
 
   1. SOLD    - the page loads and shows Vinted's "Sold" badge
                (<div class="web_ui__Cell__body">Sold</div>).
@@ -15,12 +15,20 @@ For a given listing URL, visiting the page tells us one of three things:
                was just buried past the pages we scrape (e.g. past page 10),
                not actually gone. We refresh its data and reactivate it.
                status becomes "active".
-  3. DELETED - the page 404s / errors entirely. Genuinely removed, but we
-               can't confirm *why* (could be sold without the badge, could
-               be taken down, could be blocked from us).
+  3. GONE    - the page actually 404s. Genuinely removed, but we can't
+               confirm *why* (could be sold without the badge, could be
+               taken down, could be blocked from us).
                status becomes "deleted" - distinct from the old
                "likely_sold_or_removed" guess, since this one was actually
                visited and confirmed unreachable, not just inferred.
+  4. ERROR   - anything else went wrong (network hiccup, a timeout,
+               Vinted being slow, an unexpected page structure). This is
+               NOT the same as a confirmed 404 - we genuinely don't know
+               what happened, so check_batch.py leaves the listing exactly
+               as it was (still "likely_sold_or_removed") instead of
+               finalizing it as "deleted". A transient failure used to get
+               permanently misclassified as deleted here, with no retry -
+               this makes it safe to just try again next run instead.
 
 This module doesn't run on its own - check_listing_page() is imported and
 driven by check_batch.py, which is run as one leg of a GitHub Actions
@@ -28,6 +36,27 @@ matrix job (see split_batches.py -> check_batch.py -> merge_batches.py).
 """
 
 import re
+
+from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
+
+# Resource types this check never needs - it only ever reads text (the
+# "Sold" badge and a price), never looks at the rendered page visually.
+# Blocking these cuts how much each visit actually has to download,
+# which is most of why a single check can take as long as it does.
+# scraper.py's own page (a different page/context entirely) doesn't use
+# this - it genuinely needs the full page for extract.js.
+BLOCKED_RESOURCE_TYPES = {"image", "media", "font", "stylesheet"}
+
+
+def block_unneeded_resources(page):
+    """Call once, right after creating a page that will only be used for
+    check_listing_page() - never on scraper.py's own page."""
+    page.route(
+        "**/*",
+        lambda route: route.abort()
+        if route.request.resource_type in BLOCKED_RESOURCE_TYPES
+        else route.continue_(),
+    )
 
 USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
@@ -52,6 +81,7 @@ def check_listing_page(page, url):
       ("sold", price_str_or_None)
       ("active", None)
       ("gone", None)
+      ("error", None)
     """
     try:
         response = page.goto(url, wait_until="domcontentloaded", timeout=20000)
@@ -59,7 +89,15 @@ def check_listing_page(page, url):
         if response is not None and response.status == 404:
             return "gone", None
 
-        page.wait_for_timeout(1500)
+        # Wait only as long as actually needed for a Cell body element to
+        # show up (same 1.5s ceiling as before), instead of always
+        # sleeping the full 1.5s even when the page already has what we
+        # need. Finding none within that time isn't an error - it just
+        # means this page genuinely has no Sold badge, same as today.
+        try:
+            page.wait_for_selector(SOLD_BADGE_SELECTOR, timeout=1500)
+        except PlaywrightTimeoutError:
+            pass
 
         # Look for any Cell body element whose text is exactly "Sold".
         cell_bodies = page.query_selector_all(SOLD_BADGE_SELECTOR)
@@ -79,5 +117,9 @@ def check_listing_page(page, url):
         return "active", None
 
     except Exception as e:
+        # Anything other than a confirmed 404 above (a timeout, a network
+        # blip, Vinted being slow) - we genuinely don't know what
+        # happened, so this must NOT be treated the same as a confirmed
+        # "gone". See the "ERROR" case in this module's docstring.
         print(f"    ! error visiting {url}: {e}")
-        return "gone", None
+        return "error", None
