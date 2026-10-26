@@ -29,7 +29,17 @@ CREATE TABLE IF NOT EXISTS listings (
     date_disappeared    TIMESTAMPTZ,
     consecutive_misses  INTEGER NOT NULL DEFAULT 0,
     sold_price          NUMERIC,
-    sold_confirmed_at   TIMESTAMPTZ
+    sold_confirmed_at   TIMESTAMPTZ,
+    -- How many times check_batch.py has confirmed this listing active
+    -- again after it vanished from the category crawl (buried past the
+    -- pages scraped, not actually gone). scraper.py backs off how often
+    -- it re-flags a repeat offender as missing, instead of applying the
+    -- same short threshold forever to a listing that's structurally
+    -- always going to be invisible to the crawl. On an existing database
+    -- that predates this column, listings_db.ensure_reactivation_count_column()
+    -- adds it (and backfills every row to 0) at runtime - no manual
+    -- migration needed.
+    reactivation_count  INTEGER NOT NULL DEFAULT 0
 );
 
 -- split_batches.py filters/sorts by these; merge-and-analyze's queries
