@@ -1,0 +1,27 @@
+name: Smoke test sold checker
+
+# Manual, read-only diagnostic - run from the Actions tab to sanity-check
+# sold_checker.py's classification logic and timing against a handful of
+# real listings with known outcomes, before trusting a change to it
+# inside the real pipeline. Doesn't touch the database (no DATABASE_URL
+# needed) and doesn't write anything back to the repo.
+on:
+  workflow_dispatch: {}
+
+jobs:
+  smoke-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out repo
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+          playwright install --with-deps chromium
+      - name: Run smoke test
+        run: python smoke_test_sold_checker.py
