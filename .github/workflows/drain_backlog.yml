@@ -1,0 +1,197 @@
+name: Backlog Drain Surge
+
+# Runs the SAME check-batches + merge-and-analyze steps as scrape.yml -
+# same TOTAL_CAP_PER_RUN, same NUM_BATCHES, same CONCURRENT_PAGES, same
+# per-batch risk profile already proven safe over real production runs -
+# just back-to-back instead of waiting out the rest of scrape.yml's
+# 6-hour cycle after each one finishes. That gap (the full pipeline takes
+# ~2.5 hours but only runs once every 6) is otherwise completely idle
+# time that could instead be spent draining the existing
+# likely_sold_or_removed backlog, which doesn't need a fresh scrape to
+# have work waiting - there's already hundreds of thousands of listings
+# queued.
+#
+# Deliberately workflow_dispatch-only, not its own cron: this is meant to
+# run as a bounded "surge" (started_at + surge_hours), not a permanent
+# change to the schedule - scrape.yml keeps discovering new listings
+# every 6 hours throughout, unaffected. A run started by a human carries
+# started_at blank (resolved to "now" below); every automatic continuation
+# passes the ORIGINAL started_at through unchanged, so surge_hours is
+# measured from when the surge actually began, not from the most recent
+# cycle.
+#
+# Stops itself (doesn't dispatch another cycle) once EITHER:
+#   - surge_hours have elapsed since started_at, or
+#   - the backlog has dropped under 1,000 (not worth burning more cycles on)
+# To stop a surge early for any other reason, just cancel the
+# currently-running workflow run from the Actions tab - nothing
+# retriggers the next cycle once this run itself is cancelled, since the
+# self-dispatch only happens from this run's own last step.
+on:
+  workflow_dispatch:
+    inputs:
+      surge_hours:
+        description: "Keep draining for this many hours total (measured from first cycle's start, not each cycle)"
+        default: "72"
+      started_at:
+        description: "Leave blank when starting a surge by hand - set automatically. Only ever populated by this workflow's own self-dispatch, to carry the original start time through every chained cycle."
+        default: ""
+
+# Same group as scrape.yml's own concurrency group, on purpose: a surge
+# cycle and a scheduled scrape run must never execute at the same time -
+# both touch the same likely_sold_or_removed queue and push to main.
+# cancel-in-progress: false means whichever started first finishes before
+# the other begins, instead of either being dropped.
+concurrency:
+  group: vinted-scraper
+  cancel-in-progress: false
+
+jobs:
+  split:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      DATABASE_URL: ${{ secrets.DATABASE_URL }}
+    outputs:
+      started_at: ${{ steps.resolve_started_at.outputs.started_at }}
+    steps:
+      - name: Check out repo
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install dependencies
+        # split_batches.py only ever talks to the database, never a
+        # browser - no playwright browser install needed here (unlike
+        # scrape.yml's own "scrape" job), which is most of why this job
+        # is fast.
+        run: pip install -r requirements.txt
+      - name: Resolve surge start time
+        id: resolve_started_at
+        run: |
+          if [ -z "${{ inputs.started_at }}" ]; then
+            STARTED_AT=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+            echo "First cycle of a new surge - start time is now: $STARTED_AT"
+          else
+            STARTED_AT="${{ inputs.started_at }}"
+            echo "Continuing a surge that began at: $STARTED_AT"
+          fi
+          echo "started_at=$STARTED_AT" >> "$GITHUB_OUTPUT"
+      - name: Split unconfirmed listings into batches
+        run: python split_batches.py
+      - name: Upload batch files
+        # See scrape.yml's identical step for why continue-on-error is
+        # here - an upload-artifact infra flake shouldn't take down the
+        # whole cycle.
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: batches
+          path: data/batches/batch_*.csv
+          retention-days: 1
+
+  check-batches:
+    needs: split
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    strategy:
+      matrix:
+        batch: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17]
+      fail-fast: false
+    steps:
+      - name: Check out repo
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+          playwright install --with-deps chromium
+      - name: Download batch files
+        continue-on-error: true
+        uses: actions/download-artifact@v4
+        with:
+          name: batches
+          path: data/batches
+      - name: Check this batch
+        run: python check_batch.py ${{ matrix.batch }}
+      - name: Upload this batch's results
+        uses: actions/upload-artifact@v4
+        with:
+          name: results-${{ matrix.batch }}
+          path: data/batches/results_${{ matrix.batch }}.csv
+          retention-days: 1
+
+  merge-and-analyze:
+    needs: [split, check-batches]
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    env:
+      DATABASE_URL: ${{ secrets.DATABASE_URL }}
+    steps:
+      - name: Check out repo
+        uses: actions/checkout@v4
+        with:
+          ref: main
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+      - name: Download all batch results
+        uses: actions/download-artifact@v4
+        with:
+          pattern: results-*
+          path: data/batches
+          merge-multiple: true
+      - name: Merge results into database
+        run: python merge_batches.py
+      - name: Run analytics
+        run: python run_analytics.py
+      - name: Commit analytics data
+        run: |
+          git config user.name "vinted-scraper-bot"
+          git config user.email "actions@users.noreply.github.com"
+          git add data/group_stats.csv data/deals.csv data/resale_opportunities.csv
+          git diff --quiet --cached || git commit -m "Backlog drain cycle $(date -u +'%Y-%m-%d %H:%M UTC')"
+          git pull --rebase origin main
+          git push origin HEAD:main
+      - name: Archive resolved listings
+        continue-on-error: true
+        run: python archive_resolved.py
+      - name: Decide whether to continue the surge
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: |
+          STARTED_AT="${{ needs.split.outputs.started_at }}"
+          SURGE_HOURS="${{ inputs.surge_hours }}"
+          STARTED_EPOCH=$(date -u -d "$STARTED_AT" +%s)
+          NOW_EPOCH=$(date -u +%s)
+          ELAPSED_HOURS=$(( (NOW_EPOCH - STARTED_EPOCH) / 3600 ))
+          echo "Surge started at $STARTED_AT - running $ELAPSED_HOURS hour(s) so far (limit: $SURGE_HOURS)."
+
+          REMAINING=$(python3 -c "
+          import listings_db
+          with listings_db.get_connection() as conn:
+              with conn.cursor() as cur:
+                  cur.execute(\"SELECT count(*) FROM listings WHERE status = 'likely_sold_or_removed'\")
+                  print(cur.fetchone()[0])
+          ")
+          echo "Backlog remaining: $REMAINING"
+
+          if [ "$ELAPSED_HOURS" -ge "$SURGE_HOURS" ]; then
+            echo "Surge time limit reached - stopping, not dispatching another cycle."
+          elif [ "$REMAINING" -lt 1000 ]; then
+            echo "Backlog down to $REMAINING - close enough to drained, stopping here."
+          else
+            echo "Continuing surge - dispatching the next cycle."
+            curl -sS -X POST \
+              -H "Authorization: Bearer ${{ github.token }}" \
+              -H "Accept: application/vnd.github+json" \
+              "https://api.github.com/repos/${{ github.repository }}/actions/workflows/drain_backlog.yml/dispatches" \
+              -d "{\"ref\":\"main\",\"inputs\":{\"surge_hours\":\"$SURGE_HOURS\",\"started_at\":\"$STARTED_AT\"}}"
+          fi
