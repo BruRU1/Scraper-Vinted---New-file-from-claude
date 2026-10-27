@@ -127,6 +127,10 @@ jobs:
 
   merge-and-analyze:
     needs: [split, check-batches]
+    # See scrape.yml's identical condition for why - without this, one
+    # cancelled/failed matrix leg discards every other batch's real
+    # results instead of just the one that didn't finish.
+    if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 120
     env:

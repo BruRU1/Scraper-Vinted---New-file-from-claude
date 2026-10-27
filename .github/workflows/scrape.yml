@@ -99,6 +99,15 @@ jobs:
 
   merge-and-analyze:
     needs: check-batches
+    # Without this, GitHub's default behavior is to skip this job
+    # entirely the moment ANY single matrix leg of check-batches fails or
+    # gets cancelled - discarding every other batch's real, successfully
+    # checked results along with it, not just the one that didn't finish.
+    # merge_batches.py only ever globs whatever results_*.csv files
+    # actually exist (see its own docstring) - it was always designed to
+    # cope with a partial set, so there's no reason to throw away 17
+    # batches' worth of real work over 1 that didn't make it.
+    if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 120
     env:
